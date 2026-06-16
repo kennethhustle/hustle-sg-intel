@@ -202,14 +202,15 @@ export default async function HiringIntelligencePage() {
                 </tr>
               ) : (
                 jobs.slice(0, 100).map((job) => {
-                  const comp = job.competitors as {
+                  const compRaw = job.competitors
+                  const comp = (Array.isArray(compRaw) ? compRaw[0] : compRaw) as {
                     id: string
                     name: string
                     slug: string
                     color: string
                     is_hustle: boolean
                     tier: string
-                  } | null
+                  } | null | undefined
 
                   return (
                     <tr

@@ -184,14 +184,15 @@ export default async function CourseIntelligencePage() {
                 </tr>
               ) : (
                 courses.slice(0, 100).map((course) => {
-                  const comp = course.competitors as {
+                  const compRaw = course.competitors
+                  const comp = (Array.isArray(compRaw) ? compRaw[0] : compRaw) as {
                     id: string
                     name: string
                     slug: string
                     color: string
                     is_hustle: boolean
                     tier: string
-                  } | null
+                  } | null | undefined
 
                   return (
                     <tr

@@ -80,11 +80,11 @@ export async function GET(request: Request) {
       }
 
       const metrics: Partial<Record<Platform, SocialMetric | null>> = {
-        instagram: row.instagram_followers !== null ? { followers: row.instagram_followers } as SocialMetric : null,
-        facebook: row.facebook_followers !== null ? { followers: row.facebook_followers } as SocialMetric : null,
-        linkedin: row.linkedin_followers !== null ? { followers: row.linkedin_followers } as SocialMetric : null,
-        tiktok: row.tiktok_followers !== null ? { followers: row.tiktok_followers } as SocialMetric : null,
-        youtube: row.youtube_followers !== null ? { followers: row.youtube_followers } as SocialMetric : null,
+        instagram: row.instagram_followers !== null ? { followers: row.instagram_followers } as unknown as SocialMetric : null,
+        facebook: row.facebook_followers !== null ? { followers: row.facebook_followers } as unknown as SocialMetric : null,
+        linkedin: row.linkedin_followers !== null ? { followers: row.linkedin_followers } as unknown as SocialMetric : null,
+        tiktok: row.tiktok_followers !== null ? { followers: row.tiktok_followers } as unknown as SocialMetric : null,
+        youtube: row.youtube_followers !== null ? { followers: row.youtube_followers } as unknown as SocialMetric : null,
       }
 
       return {
