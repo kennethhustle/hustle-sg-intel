@@ -1,23 +1,26 @@
 import { createServiceClient } from '@/lib/supabase/server'
 import { scrapeSkillsFutureV2, type SFCourse } from '@/lib/services/courses/skillsfuture_v2'
 
+// providerMatch: case-insensitive substring that must appear in the course's provider_name
+// to confirm the course genuinely belongs to this competitor (avoids upsert collisions)
 const SF_PROVIDERS = [
-  { competitorName: 'BELLS Institute',    searchTerms: ['BELLS Institute'] },
-  { competitorName: 'Vertical Institute', searchTerms: ['Vertical Institute'] },
-  { competitorName: 'OOm Pte Ltd',        searchTerms: ['OOm'] },
-  { competitorName: 'Skills Dev Academy', searchTerms: ['Skills Development Academy', 'SDA Academy'] },
-  { competitorName: 'InfoTech Academy',   searchTerms: ['Info-Tech Academy', 'InfoTech Academy'] },
-  { competitorName: 'ASK Training',       searchTerms: ['ASK Training'] },
-  { competitorName: 'Heicoders Academy',  searchTerms: ['Heicoders'] },
-  { competitorName: 'Happy Together',     searchTerms: ['Happy Together'] },
-  { competitorName: 'Equinet Academy',    searchTerms: ['Equinet'] },
-  { competitorName: 'Hustle SG',          searchTerms: ['Hustle Singapore', 'Hustle SG'] },
+  { competitorName: 'BELLS Institute',    providerMatch: 'bells',             searchTerms: ['BELLS Institute'] },
+  { competitorName: 'Vertical Institute', providerMatch: 'vertical',          searchTerms: ['Vertical Institute'] },
+  { competitorName: 'OOm Pte Ltd',        providerMatch: 'oom',               searchTerms: ['OOm'] },
+  { competitorName: 'Skills Dev Academy', providerMatch: 'skills development', searchTerms: ['Skills Development Academy', 'SDA Academy'] },
+  { competitorName: 'InfoTech Academy',   providerMatch: 'info',              searchTerms: ['Info-Tech Academy', 'InfoTech Academy'] },
+  { competitorName: 'ASK Training',       providerMatch: 'ask',               searchTerms: ['ASK Training'] },
+  { competitorName: 'Heicoders Academy',  providerMatch: 'heicoders',         searchTerms: ['Heicoders'] },
+  { competitorName: 'Happy Together',     providerMatch: 'happy together',    searchTerms: ['Happy Together'] },
+  { competitorName: 'Equinet Academy',    providerMatch: 'equinet',           searchTerms: ['Equinet'] },
+  { competitorName: 'Hustle SG',          providerMatch: 'hustle',            searchTerms: ['Hustle Singapore', 'Hustle SG'] },
 ]
 
 export interface SFIngestionResult {
   competitor_name: string
   search_term: string
   rows_found: number
+  rows_matched: number
   rows_upserted: number
   error: string | null
   source_api_url: string
@@ -27,6 +30,7 @@ export interface SFIngestionResult {
 export interface SFIngestionSummary {
   total_competitors: number
   total_found: number
+  total_matched: number
   total_upserted: number
   results: SFIngestionResult[]
   started_at: string
@@ -44,7 +48,7 @@ export async function ingestAllSFCourses(): Promise<SFIngestionSummary> {
 
   const compMap = new Map(competitors.map(c => [c.name, c.id]))
   const results: SFIngestionResult[] = []
-  let totalFound = 0, totalUpserted = 0
+  let totalFound = 0, totalMatched = 0, totalUpserted = 0
 
   for (const provider of SF_PROVIDERS) {
     const competitorId = compMap.get(provider.competitorName)
@@ -64,9 +68,15 @@ export async function ingestAllSFCourses(): Promise<SFIngestionSummary> {
         scrapeError = err instanceof Error ? err.message : String(err)
       }
 
+      // Filter to only courses genuinely from this provider
+      const matchStr = provider.providerMatch.toLowerCase()
+      const matchedCourses = courses.filter(c =>
+        c.providerName.toLowerCase().includes(matchStr)
+      )
+
       let rowsUpserted = 0
-      if (courses.length > 0 && competitorId) {
-        const rows = courses.map(c => ({
+      if (matchedCourses.length > 0 && competitorId) {
+        const rows = matchedCourses.map(c => ({
           competitor_id: competitorId,
           sf_ref_no: c.sfRefNo,
           title: c.title,
@@ -98,13 +108,14 @@ export async function ingestAllSFCourses(): Promise<SFIngestionSummary> {
         competitor_name: provider.competitorName,
         search_term: term,
         rows_found: courses.length,
+        rows_matched: matchedCourses.length,
         rows_upserted: rowsUpserted,
         error: scrapeError,
         source_api_url: sourceUrl,
         scraped_at,
       }
 
-      if (!bestResult || termResult.rows_found > bestResult.rows_found) {
+      if (!bestResult || termResult.rows_matched > bestResult.rows_matched) {
         bestResult = termResult
       }
 
@@ -114,6 +125,7 @@ export async function ingestAllSFCourses(): Promise<SFIngestionSummary> {
     if (bestResult) {
       results.push(bestResult)
       totalFound += bestResult.rows_found
+      totalMatched += bestResult.rows_matched
       totalUpserted += bestResult.rows_upserted
     }
 
@@ -123,6 +135,7 @@ export async function ingestAllSFCourses(): Promise<SFIngestionSummary> {
   return {
     total_competitors: SF_PROVIDERS.length,
     total_found: totalFound,
+    total_matched: totalMatched,
     total_upserted: totalUpserted,
     results,
     started_at,
