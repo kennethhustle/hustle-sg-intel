@@ -71,26 +71,27 @@ export async function ingestAllSFCourses(): Promise<SFIngestionSummary> {
           sf_ref_no: c.sfRefNo,
           title: c.title,
           provider_name: c.providerName,
-          category: c.category,
-          total_training_duration_hours: c.durationHours,
-          funding_validity_start: c.fundingStart,
-          funding_validity_end: c.fundingEnd,
-          total_cost_without_gst: c.totalCost,
+          category_text: c.category,
+          course_fee: c.totalCost,
           popularity_score: c.popularityScore,
-          respondents: c.respondents,
-          rating: c.rating,
-          active_run_count: c.activeRunCount,
-          mode_of_training: c.modeOfTraining,
+          respondent_count: c.respondents,
+          quality_rating: c.rating,
+          has_active_runs: c.activeRunCount > 0,
+          course_mode: c.modeOfTraining,
           source_api_url: sourceUrl,
           scraped_at,
         }))
 
-        const { error: upsertErr, count } = await supabase
+        const { error: upsertErr, data: upsertData } = await supabase
           .from('sf_courses')
           .upsert(rows, { onConflict: 'sf_ref_no', ignoreDuplicates: false })
           .select('sf_ref_no')
 
-        if (!upsertErr) rowsUpserted = count ?? rows.length
+        if (upsertErr) {
+          scrapeError = `Upsert error: ${upsertErr.message}`
+        } else {
+          rowsUpserted = upsertData?.length ?? rows.length
+        }
       }
 
       const termResult: SFIngestionResult = {
