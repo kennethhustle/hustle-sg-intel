@@ -36,6 +36,7 @@ export async function scrapeInstagram(
         'Cache-Control': 'no-cache',
       },
       next: { revalidate: 0 },
+      signal: AbortSignal.timeout(10_000),
     })
 
     if (!res.ok) {

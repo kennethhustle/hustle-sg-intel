@@ -38,6 +38,7 @@ export async function scrapeTikTok(
         Referer: 'https://www.tiktok.com/',
       },
       next: { revalidate: 0 },
+      signal: AbortSignal.timeout(10_000),
     })
 
     if (!res.ok) {

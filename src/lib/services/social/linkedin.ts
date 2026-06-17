@@ -36,6 +36,7 @@ export async function scrapeLinkedIn(
         'Accept-Language': 'en-US,en;q=0.9',
       },
       next: { revalidate: 0 },
+      signal: AbortSignal.timeout(10_000),
     })
 
     if (!res.ok) {
