@@ -14,71 +14,52 @@ interface SkillsFutureCourse {
   raw_data: Record<string, unknown>
 }
 
-interface SFAPIResponse {
-  data: {
-    courses: SFAPICourse[]
-    total: number
-  }
-}
-
-interface SFAPICourse {
-  courseReferenceNumber: string
-  title: string
-  trainingProviderAlias: string
-  category: {
-    description: string
-  }
-  subCategory: {
-    description: string
-  }
-  totalTrainingDuration: number
-  totalTrainingDurationUOM: string
-  totalCostOfTrainingPerTrainee: number
-  sfcFunding: {
-    maxSfcFunding: number
-    minSfcFunding: number
-  }
-  courseStatus: string
-  url: string
+interface SFDoc {
+  Course_Title: string
+  Course_Ref_No: string
+  Course_Funding: string | string[] | null
+  Tol_Cost_of_Trn_Per_Trainee: number | null
+  Area_of_Training: string[] | null
+  Organisation_Name: string | null
+  TP_ALIAS: string | null
+  Mode_of_Training_text: string | null
+  EXT_Course_Ref_No?: string
 }
 
 export async function scrapeSkillsFuture(
   companyName: string
 ): Promise<ScraperResult<SkillsFutureCourse[]>> {
   const scraped_at = new Date().toISOString()
-  const encodedName = encodeURIComponent(companyName)
-  const url = `https://api.myskillsfuture.gov.sg/individual/api/course/partner/search?keyword=${encodedName}&pageSize=20&pageIndex=0`
+  const today = new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')
+
+  // Use the correct portal search endpoint (same one the browser uses)
+  const solrQuery = [
+    'rows=100',
+    'fq=IsValid:true',
+    `fq=Course_Supp_Period_To_1:[${today} TO *]`,
+    `q=${encodeURIComponent(companyName)}`,
+  ].join('&')
+
+  const url = `https://www.myskillsfuture.gov.sg/services/tex/individual/course-search?query=${encodeURIComponent(solrQuery)}&jumpstart=true&client_id=944a4464-b321-4751-9020-ed87393cb465`
 
   try {
     const res = await fetch(url, {
       headers: {
         Accept: 'application/json',
         'User-Agent':
-          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-        'X-API-KEY': 'mysf-anonymous',
+          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        Referer: 'https://www.myskillsfuture.gov.sg/',
       },
       next: { revalidate: 0 },
+      signal: AbortSignal.timeout(30_000),
     })
 
     if (!res.ok) {
-      // Try alternate endpoint
-      const altUrl = `https://api.myskillsfuture.gov.sg/individual/api/course/search?keyword=${encodedName}&pageSize=20&pageIndex=0`
-      const altRes = await fetch(altUrl, {
-        headers: {
-          Accept: 'application/json',
-          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36',
-        },
-        next: { revalidate: 0 },
-      })
-      if (!altRes.ok) {
-        throw new Error(`SkillsFuture API HTTP ${res.status}: ${res.statusText}`)
-      }
-      const altData = await altRes.json()
-      return processSFResponse(altData, companyName, url, scraped_at)
+      throw new Error(`SkillsFuture API HTTP ${res.status}: ${res.statusText}`)
     }
 
-    const data: SFAPIResponse = await res.json()
-    return processSFResponse(data, companyName, url, scraped_at)
+    const data = await res.json()
+    return processPortalResponse(data, companyName, url, scraped_at)
   } catch (err) {
     return {
       success: false,
@@ -90,68 +71,58 @@ export async function scrapeSkillsFuture(
   }
 }
 
-function processSFResponse(
+function processPortalResponse(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   data: any,
   companyName: string,
   url: string,
   scraped_at: string
 ): ScraperResult<SkillsFutureCourse[]> {
-  const courses: SkillsFutureCourse[] = []
-  const rawCourses: SFAPICourse[] =
-    data?.data?.courses ||
-    data?.courses ||
-    data?.data ||
-    []
+  // Response is grouped by GroupID (course run groups)
+  const groups: Array<{ doclist: { docs: SFDoc[] } }> =
+    data?.grouped?.GroupID?.groups || []
 
-  if (!Array.isArray(rawCourses)) {
-    return {
-      success: true,
-      data: [],
-      error: null,
-      scraped_at,
-      source: url,
-    }
+  if (groups.length === 0) {
+    return { success: true, data: [], error: null, scraped_at, source: url }
   }
 
-  for (const course of rawCourses) {
-    // Filter to only include courses from this training provider
-    const providerName = (course.trainingProviderAlias || '').toLowerCase()
-    const searchName = companyName.toLowerCase()
-    const nameWords = searchName.split(' ').filter((w) => w.length > 2)
-    const matchesProvider = nameWords.some((word) => providerName.includes(word))
-    if (!matchesProvider && rawCourses.length > 5) continue
+  const nameUpper = companyName.toUpperCase()
+  const nameWords = nameUpper.split(/\s+/).filter((w) => w.length > 2)
+  const seen = new Set<string>()
+  const courses: SkillsFutureCourse[] = []
 
-    // Convert duration to hours
-    let durationHours: number | null = null
-    if (course.totalTrainingDuration) {
-      const uom = (course.totalTrainingDurationUOM || '').toLowerCase()
-      if (uom.includes('hour')) {
-        durationHours = course.totalTrainingDuration
-      } else if (uom.includes('day')) {
-        durationHours = course.totalTrainingDuration * 8
-      } else if (uom.includes('minute')) {
-        durationHours = Math.round(course.totalTrainingDuration / 60)
-      }
-    }
+  for (const group of groups) {
+    const doc: SFDoc = group.doclist?.docs?.[0]
+    if (!doc) continue
 
-    const sfcMax = course.sfcFunding?.maxSfcFunding || null
-    const isSFClaimable = sfcMax !== null && sfcMax > 0
+    // Filter to match this training provider
+    const providerName = (doc.Organisation_Name || doc.TP_ALIAS || '').toUpperCase()
+    const matches = nameWords.some((word) => providerName.includes(word))
+    if (!matches) continue
+
+    const ref = doc.Course_Ref_No
+    if (!ref || seen.has(ref)) continue
+    seen.add(ref)
+
+    const funding = Array.isArray(doc.Course_Funding)
+      ? doc.Course_Funding
+      : doc.Course_Funding
+      ? [doc.Course_Funding]
+      : []
+    const isSFC = funding.some((f) => f.toUpperCase().includes('SFC'))
 
     courses.push({
-      title: course.title || '',
-      category: course.category?.description || null,
-      sub_category: course.subCategory?.description || null,
-      price: course.totalCostOfTrainingPerTrainee || null,
+      title: doc.Course_Title || '',
+      category: doc.Area_of_Training?.[0] ?? null,
+      sub_category: null,
+      price: doc.Tol_Cost_of_Trn_Per_Trainee ?? null,
       currency: 'SGD',
-      duration_hours: durationHours,
-      is_skillsfuture_claimable: isSFClaimable,
-      skillsfuture_credit: sfcMax,
+      duration_hours: null,
+      is_skillsfuture_claimable: isSFC,
+      skillsfuture_credit: isSFC ? 1 : null, // presence flag; exact amount not in this API
       source: 'skillsfuture',
-      source_url: course.url
-        ? `https://www.myskillsfuture.gov.sg/content/portal/en/training-exchange/course-directory/course-detail.html?courseReferenceNumber=${course.courseReferenceNumber}`
-        : null,
-      raw_data: course as unknown as Record<string, unknown>,
+      source_url: `https://www.myskillsfuture.gov.sg/content/portal/en/training-exchange/course-directory/course-detail.html?courseReferenceNumber=${ref}`,
+      raw_data: doc as unknown as Record<string, unknown>,
     })
   }
 
