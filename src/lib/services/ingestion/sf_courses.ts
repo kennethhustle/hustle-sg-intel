@@ -1,26 +1,24 @@
 import { createServiceClient } from '@/lib/supabase/server'
-import { scrapeSkillsFutureV2, type SFCourse } from '@/lib/services/courses/skillsfuture_v2'
+import { scrapeSkillsFutureByProvider, type SFCourse } from '@/lib/services/courses/skillsfuture_v2'
 
-// providerMatch: case-insensitive substring that must appear in the course's provider_name
-// to confirm the course genuinely belongs to this competitor (avoids upsert collisions)
+// Exact TP_ALIAS_Suggest names from the SkillsFuture Solr index
 const SF_PROVIDERS = [
-  { competitorName: 'BELLS Institute',    providerMatch: 'bells',             searchTerms: ['BELLS Institute'] },
-  { competitorName: 'Vertical Institute', providerMatch: 'vertical',          searchTerms: ['Vertical Institute'] },
-  { competitorName: 'OOm Pte Ltd',        providerMatch: 'oom',               searchTerms: ['OOm'] },
-  { competitorName: 'Skills Dev Academy', providerMatch: 'skills development', searchTerms: ['Skills Development Academy', 'SDA Academy'] },
-  { competitorName: 'InfoTech Academy',   providerMatch: 'info',              searchTerms: ['Info-Tech Academy', 'InfoTech Academy'] },
-  { competitorName: 'ASK Training',       providerMatch: 'ask',               searchTerms: ['ASK Training'] },
-  { competitorName: 'Heicoders Academy',  providerMatch: 'heicoders',         searchTerms: ['Heicoders'] },
-  { competitorName: 'Happy Together',     providerMatch: 'happy together',    searchTerms: ['Happy Together'] },
-  { competitorName: 'Equinet Academy',    providerMatch: 'equinet',           searchTerms: ['Equinet'] },
-  { competitorName: 'Hustle SG',          providerMatch: 'hustle',            searchTerms: ['Hustle Singapore', 'Hustle SG'] },
+  { competitorName: 'BELLS Institute',    tpAliasName: 'BELLS INSTITUTE OF HIGHER LEARNING PTE. LTD.' },
+  { competitorName: 'Vertical Institute', tpAliasName: 'VERTICAL INSTITUTE PTE. LTD.' },
+  { competitorName: 'OOm Pte Ltd',        tpAliasName: 'OOM PTE. LTD.' },
+  { competitorName: 'Skills Dev Academy', tpAliasName: 'SKILLS DEVELOPMENT ACADEMY PTE. LTD.' },
+  { competitorName: 'InfoTech Academy',   tpAliasName: 'INFO-TECH SYSTEMS LTD.' },
+  { competitorName: 'ASK Training',       tpAliasName: '@ASK TRAINING PTE. LTD.' },
+  { competitorName: 'Heicoders Academy',  tpAliasName: 'HEICODERS ACADEMY PRIVATE LIMITED' },
+  { competitorName: 'Happy Together',     tpAliasName: 'HAPPY TOGETHER PTE. LTD.' },
+  { competitorName: 'Equinet Academy',    tpAliasName: 'EQUINET ACADEMY PRIVATE LIMITED' },
+  { competitorName: 'Hustle SG',          tpAliasName: 'HUSTLE INSTITUTE PTE. LTD.' },
 ]
 
 export interface SFIngestionResult {
   competitor_name: string
-  search_term: string
+  tp_alias_name: string
   rows_found: number
-  rows_matched: number
   rows_upserted: number
   error: string | null
   source_api_url: string
@@ -30,7 +28,6 @@ export interface SFIngestionResult {
 export interface SFIngestionSummary {
   total_competitors: number
   total_found: number
-  total_matched: number
   total_upserted: number
   results: SFIngestionResult[]
   started_at: string
@@ -48,94 +45,72 @@ export async function ingestAllSFCourses(): Promise<SFIngestionSummary> {
 
   const compMap = new Map(competitors.map(c => [c.name, c.id]))
   const results: SFIngestionResult[] = []
-  let totalFound = 0, totalMatched = 0, totalUpserted = 0
+  let totalFound = 0, totalUpserted = 0
 
   for (const provider of SF_PROVIDERS) {
     const competitorId = compMap.get(provider.competitorName)
-    let bestResult: SFIngestionResult | null = null
+    const scraped_at = new Date().toISOString()
+    let courses: SFCourse[] = []
+    let scrapeError: string | null = null
+    let sourceUrl = ''
+    let rowsUpserted = 0
 
-    for (const term of provider.searchTerms) {
-      const scraped_at = new Date().toISOString()
-      let courses: SFCourse[] = []
-      let scrapeError: string | null = null
-      let sourceUrl = ''
+    try {
+      const result = await scrapeSkillsFutureByProvider(provider.tpAliasName, 300)
+      courses = result.courses
+      sourceUrl = result.sourceUrl
+    } catch (err) {
+      scrapeError = err instanceof Error ? err.message : String(err)
+    }
 
-      try {
-        const result = await scrapeSkillsFutureV2(term)
-        courses = result.courses
-        sourceUrl = result.sourceUrl
-      } catch (err) {
-        scrapeError = err instanceof Error ? err.message : String(err)
-      }
-
-      // Filter to only courses genuinely from this provider
-      const matchStr = provider.providerMatch.toLowerCase()
-      const matchedCourses = courses.filter(c =>
-        c.providerName.toLowerCase().includes(matchStr)
-      )
-
-      let rowsUpserted = 0
-      if (matchedCourses.length > 0 && competitorId) {
-        const rows = matchedCourses.map(c => ({
-          competitor_id: competitorId,
-          sf_ref_no: c.sfRefNo,
-          title: c.title,
-          provider_name: c.providerName,
-          category_text: c.category,
-          course_fee: c.totalCost,
-          popularity_score: c.popularityScore,
-          respondent_count: c.respondents,
-          quality_rating: c.rating,
-          has_active_runs: c.activeRunCount > 0,
-          course_mode: c.modeOfTraining,
-          source_api_url: sourceUrl,
-          scraped_at,
-        }))
-
-        const { error: upsertErr, data: upsertData } = await supabase
-          .from('sf_courses')
-          .upsert(rows, { onConflict: 'sf_ref_no', ignoreDuplicates: false })
-          .select('sf_ref_no')
-
-        if (upsertErr) {
-          scrapeError = `Upsert error: ${upsertErr.message}`
-        } else {
-          rowsUpserted = upsertData?.length ?? rows.length
-        }
-      }
-
-      const termResult: SFIngestionResult = {
-        competitor_name: provider.competitorName,
-        search_term: term,
-        rows_found: courses.length,
-        rows_matched: matchedCourses.length,
-        rows_upserted: rowsUpserted,
-        error: scrapeError,
+    if (courses.length > 0 && competitorId) {
+      const rows = courses.map((c: SFCourse) => ({
+        competitor_id: competitorId,
+        sf_ref_no: c.sfRefNo,
+        title: c.title,
+        provider_name: c.providerName,
+        category_text: c.category,
+        course_fee: c.totalCost,
+        popularity_score: c.popularityScore,
+        respondent_count: c.respondents,
+        quality_rating: c.rating,
+        has_active_runs: c.hasActiveRuns,
+        course_mode: c.modeOfTraining,
         source_api_url: sourceUrl,
         scraped_at,
-      }
+      }))
 
-      if (!bestResult || termResult.rows_matched > bestResult.rows_matched) {
-        bestResult = termResult
-      }
+      const { error: upsertErr, data: upsertData } = await supabase
+        .from('sf_courses')
+        .upsert(rows, { onConflict: 'sf_ref_no', ignoreDuplicates: false })
+        .select('sf_ref_no')
 
-      await delay(800)
+      if (upsertErr) {
+        scrapeError = (scrapeError ? scrapeError + ' | ' : '') + `Upsert error: ${upsertErr.message}`
+      } else {
+        rowsUpserted = upsertData?.length ?? rows.length
+      }
     }
 
-    if (bestResult) {
-      results.push(bestResult)
-      totalFound += bestResult.rows_found
-      totalMatched += bestResult.rows_matched
-      totalUpserted += bestResult.rows_upserted
-    }
+    results.push({
+      competitor_name: provider.competitorName,
+      tp_alias_name: provider.tpAliasName,
+      rows_found: courses.length,
+      rows_upserted: rowsUpserted,
+      error: scrapeError,
+      source_api_url: sourceUrl,
+      scraped_at,
+    })
 
-    await delay(1500)
+    totalFound += courses.length
+    totalUpserted += rowsUpserted
+
+    await delay(2000) // be polite between providers
   }
 
   return {
     total_competitors: SF_PROVIDERS.length,
     total_found: totalFound,
-    total_matched: totalMatched,
     total_upserted: totalUpserted,
     results,
     started_at,
