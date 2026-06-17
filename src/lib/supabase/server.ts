@@ -1,5 +1,5 @@
 import { createServerClient } from '@supabase/ssr'
-import { createClient } from '@supabase/supabase-js'
+import { createClient as createSupabaseClient } from '@supabase/supabase-js'
 import { cookies } from 'next/headers'
 
 // User-session client — reads cookies, enforces RLS as the logged-in user
@@ -30,7 +30,7 @@ export async function createClient() {
 // Service-role client — never reads cookies, always bypasses RLS
 // Use this for cron jobs and server-side data ingestion
 export async function createServiceClient() {
-  return createClient(
+  return createSupabaseClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!,
     {
