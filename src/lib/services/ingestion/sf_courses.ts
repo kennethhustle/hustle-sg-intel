@@ -13,6 +13,7 @@ const SF_PROVIDERS = [
   { competitorName: 'Happy Together',     tpAliasName: 'HAPPY TOGETHER PTE. LTD.' },
   { competitorName: 'Equinet Academy',    tpAliasName: 'EQUINET ACADEMY PRIVATE LIMITED' },
   { competitorName: 'Hustle SG',          tpAliasName: 'HUSTLE INSTITUTE PTE. LTD.' },
+  { competitorName: 'Hustle SG',          tpAliasName: 'HUSTLE ACADEMY PTE. LTD.' },
 ]
 
 export interface SFIngestionResult {
