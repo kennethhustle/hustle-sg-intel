@@ -83,11 +83,65 @@ function fmtTime(iso?: string | null) {
 }
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
+
+// Fallback: compute provider summaries directly from sf_courses when provider_summary is empty
+function buildSummariesFromCourses(allCourses: {
+  sf_ref_no: string; title: string; provider_name: string
+  category_text: string | null; has_active_runs: boolean
+  quality_rating: number | null; respondent_count: number | null
+  scraped_at: string; course_fee: number | null
+}[]) {
+  const byProvider = new Map<string, typeof allCourses>()
+  for (const c of allCourses) {
+    const list = byProvider.get(c.provider_name) ?? []
+    list.push(c)
+    byProvider.set(c.provider_name, list)
+  }
+
+  const totalActive = allCourses.filter(c => c.has_active_runs).length
+
+  const summaries = [...byProvider.entries()].map(([provider_name, courses]) => {
+    const active = courses.filter(c => c.has_active_runs)
+    const catCounts = new Map<string, number>()
+    for (const c of active) {
+      if (c.category_text) catCounts.set(c.category_text, (catCounts.get(c.category_text) ?? 0) + 1)
+    }
+    let top_category: string | null = null
+    let topCount = 0
+    for (const [cat, cnt] of catCounts) {
+      if (cnt > topCount) { top_category = cat; topCount = cnt }
+    }
+    const market_share_pct = totalActive > 0
+      ? Math.round((active.length / totalActive) * 1000) / 10
+      : 0
+    return {
+      id: provider_name,
+      provider_name,
+      competitor_id: null,
+      snapshot_date: null,
+      total_courses: courses.length,
+      active_courses: active.length,
+      total_schedules: active.length,
+      top_category,
+      top_category_count: topCount,
+      avg_course_fee: null,
+      new_courses_7d: 0,
+      removed_courses_7d: 0,
+      schedule_change_7d: 0,
+      activity_score: active.length,
+      market_share_pct,
+      last_updated: courses[0]?.scraped_at ?? null,
+    }
+  }).sort((a, b) => b.active_courses - a.active_courses)
+
+  return summaries
+}
+
 async function getData() {
   const sb = await createServiceClient()
   const [
     { data: rawSummaries },
-    { data: courses },
+    { data: allCourses },
     { data: alerts },
     { data: changes },
     { data: lastRefresh },
@@ -98,12 +152,12 @@ async function getData() {
       .order('snapshot_date', { ascending: false })
       .order('active_courses',  { ascending: false }),
 
-    // All SF courses — for top-course-per-provider lookup + category breakdown
+    // All SF courses — for top-course-per-provider lookup + category breakdown + fallback
     sb.from('sf_courses')
       .select('sf_ref_no, title, provider_name, category_text, has_active_runs, quality_rating, respondent_count, scraped_at, course_fee')
-      .eq('has_active_runs', true)
+      .eq('is_valid', true)
       .order('respondent_count', { ascending: false })
-      .limit(500),
+      .limit(1000),
 
     sb.from('market_alerts')
       .select('*')
@@ -126,29 +180,49 @@ async function getData() {
 
   // Deduplicate summaries — keep latest snapshot per provider
   const seen = new Set<string>()
-  const summaries = (rawSummaries ?? []).filter((s) => {
+  const dbSummaries = (rawSummaries ?? []).filter((s) => {
     if (seen.has(s.provider_name)) return false
     seen.add(s.provider_name)
     return true
   }).sort((a, b) => (b.active_courses ?? 0) - (a.active_courses ?? 0))
 
+  // FALLBACK: if provider_summary is empty but sf_courses has data,
+  // compute summaries directly from sf_courses so the dashboard never shows DATA UNAVAILABLE
+  const usingFallback = dbSummaries.length === 0 && (allCourses ?? []).length > 0
+  const summaries = usingFallback
+    ? buildSummariesFromCourses(allCourses ?? [])
+    : dbSummaries
+
+  // Active courses for top-course map + category breakdown
+  const activeCourses = (allCourses ?? []).filter(c => c.has_active_runs)
+
   // Build top-course map per provider (highest respondent_count among active courses)
-  const topCourseMap = new Map<string, typeof courses[0]>()
-  for (const c of courses ?? []) {
+  const topCourseMap = new Map<string, typeof activeCourses[0]>()
+  for (const c of activeCourses) {
     const existing = topCourseMap.get(c.provider_name)
     if (!existing || (c.respondent_count ?? 0) > (existing.respondent_count ?? 0)) {
       topCourseMap.set(c.provider_name, c)
     }
   }
 
-  return { summaries, courses: courses ?? [], topCourseMap, alerts: alerts ?? [], changes: changes ?? [], lastRefresh }
+  return {
+    summaries,
+    courses: activeCourses,
+    allCourses: allCourses ?? [],
+    topCourseMap,
+    alerts: alerts ?? [],
+    changes: changes ?? [],
+    lastRefresh,
+    usingFallback,
+  }
 }
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 export default async function DemandIntelligencePage() {
-  const { summaries, courses, topCourseMap, alerts, changes, lastRefresh } = await getData()
+  const { summaries, courses, topCourseMap, alerts, changes, lastRefresh, usingFallback, allCourses } = await getData()
 
-  const hasData = summaries.length > 0
+  // hasData = true if we have either provider_summary rows OR sf_courses data to fall back on
+  const hasData = summaries.length > 0 || allCourses.length > 0
   const now = new Date()
   const sgTime = now.toLocaleString('en-SG', {
     timeZone: 'Asia/Singapore', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true,
@@ -188,6 +262,11 @@ export default async function DemandIntelligencePage() {
           <div className="flex items-center gap-2 text-xs text-zinc-500">
             <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse inline-block" />
             DEMAND MONITORING · {totalActive} ACTIVE COURSES · {summaries.length} PROVIDERS
+            {usingFallback && (
+              <span className="ml-2 text-yellow-500 text-xs border border-yellow-800 bg-yellow-950/30 px-2 py-0.5 rounded">
+                ⚠ FALLBACK MODE — RUN CRON TO BUILD FULL SUMMARIES
+              </span>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-4 text-xs text-zinc-500">
