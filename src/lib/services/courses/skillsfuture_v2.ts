@@ -1,12 +1,27 @@
 // SkillsFuture scraper v3 — provider-specific filter + pagination.
 // Uses the Solr {!tag=TP_ALIAS_Suggest} localparams API discovered from the SkillsFuture website.
+//
+// Grouped response structure:
+//   grouped.GroupID.groups[]        → one entry per unique course
+//     .doclist.numFound             → total number of course runs for this course
+//     .doclist.docs[0]              → first course run doc (carries course metadata)
+//     .doclist.docs[0].Course_Quality_NumberOfRespondents → "Number Attended" on SF website
+//
 const SF_API = 'https://www.myskillsfuture.gov.sg/services/tex/individual/course-search'
-const PAGE_SIZE = 24 // server-enforced maximum per page
+const PAGE_SIZE = 24 // server-enforced maximum per page (= groups per page)
 
 export interface SFCourse {
-  sfRefNo: string; title: string; providerName: string; category: string
-  totalCost: number | null; popularityScore: number; respondents: number
-  rating: number; hasActiveRuns: boolean; modeOfTraining: string | null
+  sfRefNo: string
+  title: string
+  providerName: string
+  category: string
+  totalCost: number | null
+  popularityScore: number
+  respondents: number       // = "Number Attended" shown on MySkillsFuture course page
+  rating: number
+  hasActiveRuns: boolean
+  modeOfTraining: string | null
+  upcomingRunCount: number  // = doclist.numFound per group = scheduled course runs
 }
 
 export interface SFScrapeResult {
@@ -20,7 +35,7 @@ function popScore(respondents: number, rating: number, hasRuns: boolean): number
   return Math.min(100, Math.round(score * 10) / 10)
 }
 
-function parseDoc(doc: Record<string, unknown>): SFCourse | null {
+function parseDoc(doc: Record<string, unknown>, runCount: number): SFCourse | null {
   const sfRefNo = String(doc['Course_Ref_No'] ?? '').trim()
   if (!sfRefNo) return null
   const title = String(doc['Course_Title'] ?? '').trim()
@@ -38,6 +53,7 @@ function parseDoc(doc: Record<string, unknown>): SFCourse | null {
     sfRefNo, title, providerName, category,
     totalCost, popularityScore: popScore(respondents, rating, hasRuns),
     respondents, rating, hasActiveRuns: hasRuns, modeOfTraining,
+    upcomingRunCount: runCount,
   }
 }
 
@@ -86,9 +102,11 @@ export async function scrapeSkillsFutureByProvider(
 
     for (const group of groups) {
       const doclist = group['doclist'] as Record<string, unknown> | undefined
+      // doclist.numFound = total run count for this course (from Solr grouped response)
+      const runCount = Number(doclist?.['numFound'] ?? 0)
       const docs = (doclist?.['docs'] as Array<Record<string, unknown>> | undefined) ?? []
       if (docs.length > 0) {
-        const course = parseDoc(docs[0])
+        const course = parseDoc(docs[0], runCount)
         if (course) allCourses.push(course)
       }
     }

@@ -19,6 +19,7 @@ interface SFCourseRow {
   respondent_count: number | null
   quality_rating: number | null
   popularity_score: number | null
+  upcoming_run_count: number | null
   scraped_at: string
 }
 
@@ -30,6 +31,12 @@ interface ProviderStats {
   top_category: string | null
   top_category_count: number
   avg_course_fee: number | null
+  total_attendees: number
+  total_run_count: number
+  top_course_by_attendees: string | null
+  top_course_by_runs: string | null
+  top_course_attendees: number
+  top_course_run_count: number
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -54,7 +61,7 @@ async function stepSnapshot(
     has_active_runs: c.has_active_runs,
     popularity_score: c.popularity_score ? Math.round(Number(c.popularity_score)) : 0,
     quality_rating: c.quality_rating,
-    schedule_count: c.has_active_runs ? 1 : 0,
+    schedule_count: c.upcoming_run_count ?? (c.has_active_runs ? 1 : 0),
   }))
 
   const { error, data } = await supabase
@@ -197,15 +204,24 @@ function computeProviderStats(courses: SFCourseRow[]): ProviderStats[] {
     let topCategory: string | null = null
     let topCategoryCount = 0
     for (const [cat, count] of catCounts) {
-      if (count > topCategoryCount) {
-        topCategory = cat
-        topCategoryCount = count
-      }
+      if (count > topCategoryCount) { topCategory = cat; topCategoryCount = count }
     }
 
-    // Average course fee across all courses
+    // Average course fee
     const fees = provCourses.map(c => c.course_fee).filter((f): f is number => f !== null && f > 0)
     const avgFee = fees.length > 0 ? fees.reduce((a, b) => a + b, 0) / fees.length : null
+
+    // Totals
+    const totalAttendees = provCourses.reduce((s, c) => s + (c.respondent_count ?? 0), 0)
+    const totalRunCount = provCourses.reduce((s, c) => s + (c.upcoming_run_count ?? 0), 0)
+
+    // Top course by attendees
+    const byAttendees = [...provCourses].sort((a, b) => (b.respondent_count ?? 0) - (a.respondent_count ?? 0))
+    const topByAttendees = byAttendees[0]
+
+    // Top course by run count
+    const byRuns = [...provCourses].sort((a, b) => (b.upcoming_run_count ?? 0) - (a.upcoming_run_count ?? 0))
+    const topByRuns = byRuns[0]
 
     stats.push({
       provider_name: providerName,
@@ -215,6 +231,12 @@ function computeProviderStats(courses: SFCourseRow[]): ProviderStats[] {
       top_category: topCategory,
       top_category_count: topCategoryCount,
       avg_course_fee: avgFee,
+      total_attendees: totalAttendees,
+      total_run_count: totalRunCount,
+      top_course_by_attendees: topByAttendees?.title ?? null,
+      top_course_by_runs: topByRuns?.title ?? null,
+      top_course_attendees: topByAttendees?.respondent_count ?? 0,
+      top_course_run_count: topByRuns?.upcoming_run_count ?? 0,
     })
   }
 
@@ -230,13 +252,13 @@ async function stepProviderSummary(
   const stats = computeProviderStats(courses)
   const totalActive = stats.reduce((sum, s) => sum + s.active_courses, 0)
 
-  const rows = stats.map((s, idx) => ({
+  const rows = stats.map((s) => ({
     snapshot_date: snapshotDate,
     provider_name: s.provider_name,
     competitor_id: s.competitor_id,
     total_courses: s.total_courses,
     active_courses: s.active_courses,
-    total_schedules: s.active_courses, // 1 schedule per active course (best approximation)
+    total_schedules: s.total_run_count,
     top_category: s.top_category,
     top_category_count: s.top_category_count,
     avg_course_fee: s.avg_course_fee,
@@ -244,9 +266,15 @@ async function stepProviderSummary(
       ? Math.round((s.active_courses / totalActive) * 1000) / 10
       : 0,
     activity_score: s.active_courses,
-    new_courses_7d: 0, // populated from course_changes if available
+    new_courses_7d: 0,
     removed_courses_7d: 0,
     schedule_change_7d: 0,
+    total_attendees: s.total_attendees,
+    total_run_count: s.total_run_count,
+    top_course_by_attendees: s.top_course_by_attendees,
+    top_course_by_runs: s.top_course_by_runs,
+    top_course_attendees: s.top_course_attendees,
+    top_course_run_count: s.top_course_run_count,
     last_updated: new Date().toISOString(),
   }))
 
@@ -428,7 +456,7 @@ export async function GET(request: Request) {
     // Load all current courses from sf_courses
     const { data: courses, error: coursesErr } = await supabase
       .from('sf_courses')
-      .select('id,sf_ref_no,provider_name,competitor_id,title,category_text,course_fee,has_active_runs,respondent_count,quality_rating,popularity_score,scraped_at')
+      .select('id,sf_ref_no,provider_name,competitor_id,title,category_text,course_fee,has_active_runs,respondent_count,quality_rating,popularity_score,upcoming_run_count,scraped_at')
       .eq('is_valid', true)
 
     if (coursesErr) throw new Error(`Failed to load sf_courses: ${coursesErr.message}`)

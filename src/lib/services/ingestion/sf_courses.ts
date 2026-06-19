@@ -76,6 +76,7 @@ export async function ingestAllSFCourses(): Promise<SFIngestionSummary> {
         quality_rating: c.rating,
         has_active_runs: c.hasActiveRuns,
         course_mode: c.modeOfTraining,
+        upcoming_run_count: c.upcomingRunCount,
         source_api_url: sourceUrl,
         scraped_at,
       }))
