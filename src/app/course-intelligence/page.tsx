@@ -3,40 +3,26 @@ import { createServiceClient } from '@/lib/supabase/server'
 export const revalidate = 300
 
 // ═══════════════════════════════════════════════════
-// HELPERS
+// CONSTANTS & HELPERS
 // ═══════════════════════════════════════════════════
 
-const SF_COURSE_URL = (ref: string) =>
+const SF_URL   = (ref: string) =>
   `https://www.myskillsfuture.gov.sg/content/portal/en/training-exchange/course-directory/course-detail.html?courseReferenceNumber=${ref}`
 
-// Schedule section lives on the same detail page
-const SF_SCHEDULE_URL = (ref: string) =>
-  `https://www.myskillsfuture.gov.sg/content/portal/en/training-exchange/course-directory/course-detail.html?courseReferenceNumber=${ref}#upcoming-runs`
+// Schedule tab lives on the same page — #schedule fragment
+const SCHED_URL = (ref: string) => `${SF_URL(ref)}#schedule`
 
-function fmt(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
-  return n.toLocaleString()
+function fmtDT(iso: string) {
+  const d = new Date(iso)
+  return {
+    date: d.toLocaleDateString('en-SG', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Asia/Singapore' }).toUpperCase(),
+    time: d.toLocaleTimeString('en-SG', { hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Singapore' }),
+  }
 }
 
-function fmtDT(iso: string): string {
-  return (
-    new Date(iso).toLocaleString('en-SG', {
-      day: '2-digit',
-      month: 'short',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-      timeZone: 'Asia/Singapore',
-    }) + ' SGT'
-  )
-}
+function isHustle(raw: string) { return raw.toUpperCase().includes('HUSTLE') }
 
-function isHustle(name: string) {
-  return name.toUpperCase().includes('HUSTLE')
-}
-
-const DISPLAY: Record<string, string> = {
+const GROUP: Record<string, string> = {
   'BELLS INSTITUTE OF HIGHER LEARNING PTE. LTD.': 'BELLS Institute',
   'VERTICAL INSTITUTE PTE. LTD.': 'Vertical Institute',
   'OOM PTE. LTD.': 'OOm Pte Ltd',
@@ -49,10 +35,29 @@ const DISPLAY: Record<string, string> = {
   'HUSTLE INSTITUTE PTE. LTD.': 'Hustle SG',
   'HUSTLE ACADEMY PTE. LTD.': 'Hustle SG',
 }
+function grp(raw: string) { return isHustle(raw) ? 'Hustle SG' : (GROUP[raw] ?? raw) }
 
-function groupName(raw: string) {
-  if (isHustle(raw)) return 'Hustle SG'
-  return DISPLAY[raw] ?? raw
+// One distinct colour per provider — matches "LIVE MONITORING" terminal palette
+const COLORS: Record<string, string> = {
+  'InfoTech Academy':   '#00d4e0',
+  'Skills Dev Academy': '#ff5555',
+  'OOm Pte Ltd':        '#00c8c8',
+  'Hustle SG':          '#a855f7',
+  'Heicoders Academy':  '#22d3ee',
+  'ASK Training':       '#f0c000',
+  'Equinet Academy':    '#f59e0b',
+  'BELLS Institute':    '#e2e8f0',
+  'Vertical Institute': '#4ade80',
+  'Happy Together':     '#f472b6',
+}
+function color(name: string) { return COLORS[name] ?? '#94a3b8' }
+
+// Demand level from run count — thresholds calibrated to screenshot
+function demand(runs: number): { label: string; icon: string; cls: string } {
+  if (runs >= 20) return { label: 'VERY HIGH', icon: '🔥', cls: 'text-red-500' }
+  if (runs >= 5)  return { label: 'HIGH',      icon: '⚡', cls: 'text-yellow-400' }
+  if (runs >= 2)  return { label: 'MEDIUM',    icon: '◈',  cls: 'text-blue-400' }
+  return              { label: 'LOW',      icon: '·',  cls: 'text-slate-500' }
 }
 
 // ═══════════════════════════════════════════════════
@@ -70,14 +75,12 @@ interface Course {
   scraped_at: string
 }
 
-interface ProviderCard {
+interface ProviderRow {
   name: string
   isHustle: boolean
-  indexedCourses: number
-  verifiedCourses: number   // 39 for Hustle (confirmed), else = indexedCourses
-  totalRuns: number
-  top3ByRuns: Course[]
-  top3ByAttendees: Course[]
+  topCourse: Course
+  top3: Course[]
+  topRuns: number
 }
 
 // ═══════════════════════════════════════════════════
@@ -101,323 +104,304 @@ async function getData() {
     courses[0].scraped_at,
   )
 
-  // Group by display name
+  // Group by normalised provider
   const pMap = new Map<string, Course[]>()
   for (const c of courses) {
-    const k = groupName(c.provider_name)
+    const k = grp(c.provider_name)
     if (!pMap.has(k)) pMap.set(k, [])
     pMap.get(k)!.push(c)
   }
 
-  const cards: ProviderCard[] = Array.from(pMap.entries()).map(([name, pc]) => {
-    const totalRuns = pc.reduce((s, c) => s + (c.upcoming_run_count ?? 0), 0)
-    const byRuns = [...pc].sort((a, b) => (b.upcoming_run_count ?? 0) - (a.upcoming_run_count ?? 0))
-    const byAtt  = [...pc].sort((a, b) => (b.respondent_count ?? 0) - (a.respondent_count ?? 0))
-    const hustle = isHustle(pc[0].provider_name)
+  const rows: ProviderRow[] = Array.from(pMap.entries()).map(([name, pc]) => {
+    const sorted = [...pc].sort((a, b) => (b.upcoming_run_count ?? 0) - (a.upcoming_run_count ?? 0))
     return {
       name,
-      isHustle: hustle,
-      indexedCourses: pc.length,
-      verifiedCourses: hustle ? 39 : pc.length,
-      totalRuns,
-      top3ByRuns: byRuns.slice(0, 3),
-      top3ByAttendees: byAtt.slice(0, 3),
+      isHustle: isHustle(pc[0].provider_name),
+      topCourse: sorted[0],
+      top3: sorted.slice(0, 3),
+      topRuns: sorted[0]?.upcoming_run_count ?? 0,
     }
   })
 
-  // Hustle first, then sorted by totalRuns DESC
-  cards.sort((a, b) => {
-    if (a.isHustle !== b.isHustle) return a.isHustle ? -1 : 1
-    return b.totalRuns - a.totalRuns
-  })
+  // Sort purely by top course run count DESC (no Hustle pin — honest leaderboard)
+  rows.sort((a, b) => b.topRuns - a.topRuns)
 
-  const totalRuns = courses.reduce((s, c) => s + (c.upcoming_run_count ?? 0), 0)
+  const maxRuns   = rows[0]?.topRuns ?? 1
+  const hasRunData = maxRuns > 0
 
   return {
-    cards,
-    totalCompetitors: cards.length,
-    totalCourses: courses.length,
-    totalRuns,
-    hasRunData: totalRuns > 0,
+    rows,
+    maxRuns,
+    hasRunData,
     lastScraped,
+    totalCourses: courses.length,
+    totalEntities: rows.length,
   }
-}
-
-// ═══════════════════════════════════════════════════
-// SUB-COMPONENTS
-// ═══════════════════════════════════════════════════
-
-const MEDALS = ['🥇', '🥈', '🥉']
-
-function CourseRow({
-  course,
-  rank,
-  hasRunData,
-}: {
-  course: Course
-  rank: number
-  hasRunData: boolean
-}) {
-  const runs = course.upcoming_run_count ?? 0
-  const att  = course.respondent_count ?? 0
-
-  return (
-    <div className="py-3 border-b border-slate-800/50 last:border-0">
-      <div className="flex items-start gap-2.5">
-        <span className="text-lg shrink-0 leading-none mt-0.5">{MEDALS[rank] ?? `${rank + 1}.`}</span>
-        <div className="flex-1 min-w-0">
-          {/* Title */}
-          <p className="font-semibold text-slate-100 text-sm leading-snug">{course.title}</p>
-
-          {/* Metrics row */}
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-1 text-xs">
-            {hasRunData ? (
-              <span className="font-bold text-orange-400">{runs} {runs === 1 ? 'Run' : 'Runs'}</span>
-            ) : (
-              <span className="text-slate-600 italic">Runs: data pending</span>
-            )}
-            {att > 0 && (
-              <span className="text-slate-400">{fmt(att)} Attended</span>
-            )}
-            {course.category_text && (
-              <span className="text-slate-600">{course.category_text}</span>
-            )}
-          </div>
-
-          {/* Provider name (raw, for transparency) */}
-          <p className="text-[11px] text-slate-600 mt-0.5">Provider: {course.provider_name}</p>
-
-          {/* Links */}
-          <div className="flex gap-3 mt-1.5">
-            <a
-              href={SF_COURSE_URL(course.sf_ref_no)}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-[11px] text-sky-400 hover:text-sky-300 underline underline-offset-2 transition-colors"
-            >
-              Course Page ↗
-            </a>
-            <a
-              href={SF_SCHEDULE_URL(course.sf_ref_no)}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-[11px] text-sky-400 hover:text-sky-300 underline underline-offset-2 transition-colors"
-            >
-              Schedule ↗
-            </a>
-          </div>
-        </div>
-
-        {/* Run count badge (right-aligned, large) */}
-        {hasRunData && runs > 0 && (
-          <div className="shrink-0 text-right">
-            <div className="text-2xl font-bold text-orange-400 leading-none">{runs}</div>
-            <div className="text-[10px] text-slate-600 mt-0.5">runs</div>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function Card({ card, hasRunData }: { card: ProviderCard; hasRunData: boolean }) {
-  const borderCls  = card.isHustle ? 'border-orange-700/60'  : 'border-slate-700/60'
-  const headerCls  = card.isHustle ? 'bg-orange-950/40'      : 'bg-slate-800/60'
-  const nameCls    = card.isHustle ? 'text-orange-300'        : 'text-slate-100'
-  const badgeCls   = card.isHustle
-    ? 'bg-orange-900/60 text-orange-300 border border-orange-700/60'
-    : 'bg-slate-700/60 text-slate-300 border border-slate-600/60'
-
-  const topAttended = card.top3ByAttendees[0]
-
-  return (
-    <div className={`rounded-xl border ${borderCls} bg-slate-900/60 overflow-hidden flex flex-col`}>
-
-      {/* ── Header ── */}
-      <div className={`px-5 py-3.5 flex items-center justify-between gap-3 ${headerCls}`}>
-        <div className="flex items-center gap-2 min-w-0">
-          {card.isHustle && <span className="text-orange-400 text-lg">★</span>}
-          <h2 className={`font-bold text-base tracking-wide truncate ${nameCls}`}>
-            {card.name.toUpperCase()}
-          </h2>
-        </div>
-
-        <div className="flex items-center gap-2 shrink-0">
-          {/* Course count */}
-          <span className="text-xs text-slate-500 font-mono whitespace-nowrap">
-            {card.isHustle
-              ? `${card.indexedCourses} indexed / ${card.verifiedCourses} verified`
-              : `${card.indexedCourses} courses`}
-          </span>
-
-          {/* Total runs badge */}
-          <span className={`text-xs font-bold font-mono px-2.5 py-1 rounded-full ${badgeCls}`}>
-            {hasRunData ? `${card.totalRuns} runs` : 'PENDING'}
-          </span>
-        </div>
-      </div>
-
-      {/* ── Top 3 by Course Runs ── */}
-      <div className="px-5 flex-1">
-        <p className="text-[10px] font-mono tracking-[0.15em] text-slate-500 uppercase pt-3 pb-1">
-          Top 3 by Course Runs
-        </p>
-        {card.top3ByRuns.map((c, i) => (
-          <CourseRow key={c.sf_ref_no} course={c} rank={i} hasRunData={hasRunData} />
-        ))}
-      </div>
-
-      {/* ── Top 3 by Attendees (Hustle only) ── */}
-      {card.isHustle && (
-        <div className="px-5 border-t border-orange-900/30">
-          <p className="text-[10px] font-mono tracking-[0.15em] text-orange-700 uppercase pt-3 pb-1">
-            Top 3 by Attendees
-          </p>
-          {card.top3ByAttendees.map((c, i) => (
-            <CourseRow key={`att-${c.sf_ref_no}`} course={c} rank={i} hasRunData={hasRunData} />
-          ))}
-        </div>
-      )}
-
-      {/* ── Highest Attended footer (all cards) ── */}
-      {topAttended && (topAttended.respondent_count ?? 0) > 0 && (
-        <div
-          className={`px-5 py-2.5 border-t text-xs flex flex-wrap items-baseline gap-1.5 ${
-            card.isHustle ? 'border-orange-900/40 bg-orange-950/30' : 'border-slate-800/60 bg-slate-900/80'
-          }`}
-        >
-          <span className="text-slate-500 font-mono uppercase tracking-wide text-[10px]">
-            Highest Attended:
-          </span>
-          <a
-            href={SF_COURSE_URL(topAttended.sf_ref_no)}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-slate-300 hover:text-orange-400 transition-colors font-medium truncate max-w-[220px]"
-            title={topAttended.title}
-          >
-            {topAttended.title}
-          </a>
-          <span className="text-orange-400 font-bold whitespace-nowrap">
-            {fmt(topAttended.respondent_count ?? 0)} Attended
-          </span>
-        </div>
-      )}
-    </div>
-  )
 }
 
 // ═══════════════════════════════════════════════════
 // PAGE
 // ═══════════════════════════════════════════════════
 
+const MEDALS = ['🥇', '🥈', '🥉']
+
 export default async function CourseIntelligencePage() {
   const d = await getData()
 
   if (!d) {
     return (
-      <div className="min-h-screen bg-[#0d1117] flex items-center justify-center">
+      <div className="min-h-screen bg-[#0c0c10] flex items-center justify-center font-mono">
         <div className="text-center">
-          <h1 className="text-slate-300 text-xl font-semibold mb-2">MYSKILLSFUTURE DEMAND INTELLIGENCE</h1>
-          <p className="text-slate-600 text-sm">No course data available. Run the sf-refresh cron to populate.</p>
+          <p className="text-slate-400 text-sm">MYSKILLSFUTURE DEMAND INTELLIGENCE</p>
+          <p className="text-slate-600 text-xs mt-2">No data available. Run sf-refresh cron.</p>
         </div>
       </div>
     )
   }
 
-  return (
-    <div className="min-h-screen bg-[#0d1117] text-slate-100">
+  const { rows, maxRuns, hasRunData, lastScraped, totalCourses, totalEntities } = d
+  const { date, time } = fmtDT(lastScraped)
+  const podium = rows.slice(0, 3)
 
-      {/* ── Page Header ── */}
-      <div className="border-b border-slate-800 bg-[#0d1117]/95 sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-6 py-4">
-          <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-1">
-            <div>
-              <h1 className="text-xl font-bold tracking-tight text-slate-100">
-                MYSKILLSFUTURE DEMAND INTELLIGENCE
-              </h1>
-              <p className="text-slate-400 text-sm mt-0.5">
-                Current Market Demand Based On Upcoming Course Runs
-              </p>
-            </div>
-            <p className="text-slate-600 text-xs font-mono shrink-0">
-              Last Updated: {fmtDT(d.lastScraped)}
-            </p>
+  return (
+    <div className="min-h-screen bg-[#0c0c10] text-slate-100 font-sans">
+
+      {/* ══ HEADER BAR ══ */}
+      <header className="sticky top-0 z-50 bg-[#0c0c10]/95 backdrop-blur border-b border-slate-800/60 px-6 py-2.5">
+        <div className="max-w-6xl mx-auto flex items-center justify-between">
+          <div className="flex items-center gap-2 font-mono text-sm font-bold tracking-wide">
+            <span className="text-slate-100">HUSTLE</span>
+            <span className="text-slate-600">/</span>
+            <span className="text-orange-400">INTEL</span>
+            <span className="mx-2 flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+              <span className="text-green-400 text-xs font-normal">LIVE MONITORING</span>
+            </span>
+            <span className="text-slate-600 text-xs font-normal">·</span>
+            <span className="text-slate-400 text-xs font-normal">{totalEntities} ENTITIES</span>
+          </div>
+          <div className="font-mono text-xs text-slate-500 flex items-center gap-3">
+            <span>DATA: {date}</span>
+            <span className="w-px h-3 bg-slate-700" />
+            <span className="text-slate-300">{time}</span>
+            <span className="w-px h-3 bg-slate-700" />
+            <span>SGT</span>
           </div>
         </div>
-      </div>
+      </header>
 
-      <div className="max-w-7xl mx-auto px-6 py-6">
+      <div className="max-w-6xl mx-auto px-6 py-6 space-y-6">
 
-        {/* ── Top Stats Bar ── */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-8">
-          {[
-            { label: 'Competitors Tracked', value: d.totalCompetitors },
-            { label: 'Courses Tracked', value: d.totalCourses },
-            {
-              label: 'Total Upcoming Course Runs',
-              value: d.hasRunData ? d.totalRuns : null,
-              pending: !d.hasRunData,
-            },
-            { label: 'Source', value: 'MySkillsFuture', isText: true },
-          ].map(stat => (
-            <div
-              key={stat.label}
-              className="bg-slate-800/50 border border-slate-700/50 rounded-lg px-4 py-3"
-            >
-              <p className="text-[10px] font-mono text-slate-500 tracking-wider uppercase mb-1">
-                {stat.label}
-              </p>
-              {stat.isText ? (
-                <p className="text-slate-300 text-sm font-semibold">myskillsfuture.gov.sg</p>
-              ) : stat.pending ? (
-                <p className="text-amber-500 text-sm font-mono">DATA PENDING</p>
-              ) : (
-                <p className="text-slate-100 text-2xl font-bold font-mono">
-                  {typeof stat.value === 'number' ? stat.value.toLocaleString() : stat.value}
-                </p>
-              )}
-            </div>
-          ))}
-        </div>
-
-        {/* ── Run Data Pending Banner ── */}
-        {!d.hasRunData && (
-          <div className="mb-6 flex items-start gap-3 bg-amber-950/30 border border-amber-800/40 rounded-lg px-4 py-3">
+        {/* ══ RUN DATA PENDING BANNER ══ */}
+        {!hasRunData && (
+          <div className="flex items-start gap-3 bg-amber-950/30 border border-amber-800/40 rounded-lg px-4 py-3">
             <span className="text-amber-400 text-lg shrink-0">⏳</span>
             <div>
-              <p className="text-amber-300 text-sm font-semibold">Course run count data is pending</p>
+              <p className="text-amber-300 text-sm font-semibold">Course run data pending</p>
               <p className="text-amber-700 text-xs mt-0.5">
-                upcoming_run_count is 0 for all {d.totalCourses} indexed courses. This will
-                populate automatically after the next daily scrape at 01:00 SGT. Cards below show
-                course titles and attendee counts in the meantime.
+                upcoming_run_count is 0 for all {totalCourses} courses. Populates after next scrape at 01:00 SGT.
+                The Schedule tab on MySkillsFuture shows the count as &quot;Showing 1–X of <strong>N course runs</strong>&quot; —
+                our scraper reads this from doclist.numFound in the Solr API.
               </p>
             </div>
           </div>
         )}
 
-        {/* ── Competitor Cards ── */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
-          {d.cards.map(card => (
-            <Card key={card.name} card={card} hasRunData={d.hasRunData} />
-          ))}
+        {/* ══ PODIUM — TOP 3 ══ */}
+        <div className="grid grid-cols-3 gap-3">
+          {podium.map((r, i) => {
+            const d = demand(r.topRuns)
+            const c = color(r.name)
+            const icons = ['🏆', '🥈', '🥉']
+            const sizes = ['text-5xl', 'text-4xl', 'text-4xl']
+            const borders = [
+              'border-yellow-700/50 bg-yellow-950/20',
+              'border-slate-600/40 bg-slate-800/30',
+              'border-orange-800/40 bg-orange-950/15',
+            ]
+            return (
+              <div key={r.name} className={`rounded-xl border ${borders[i]} p-5 flex flex-col gap-2`}>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-mono text-slate-500 tracking-wider">
+                    #{i + 1} HIGHEST DEMAND
+                  </span>
+                  <span className="text-lg">{icons[i]}</span>
+                </div>
+                <div className="font-bold text-sm tracking-wide" style={{ color: c }}>
+                  {r.name.toUpperCase()}
+                  {r.isHustle && (
+                    <span className="ml-2 text-[10px] font-mono bg-violet-900/60 text-violet-300 border border-violet-700/60 px-1.5 py-0.5 rounded">
+                      YOU
+                    </span>
+                  )}
+                </div>
+                <div className="flex items-baseline gap-1.5">
+                  <span className={`font-bold font-mono ${sizes[i]} text-slate-100`}>
+                    {hasRunData ? r.topRuns : '—'}
+                  </span>
+                  <span className="text-slate-500 text-sm font-mono">RUNS</span>
+                </div>
+                {r.topCourse && (
+                  <a
+                    href={SF_URL(r.topCourse.sf_ref_no)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-slate-400 text-xs hover:text-slate-200 transition-colors line-clamp-2 leading-snug"
+                  >
+                    {r.topCourse.title} ↗
+                  </a>
+                )}
+                <div className={`text-xs font-mono mt-auto ${d.cls}`}>
+                  {d.icon} {d.label}
+                </div>
+              </div>
+            )
+          })}
         </div>
 
-        {/* ── Footer ── */}
-        <footer className="mt-10 pt-4 border-t border-slate-800 text-[11px] text-slate-600 font-mono space-y-1">
-          <p>
-            DATA SOURCE: MySkillsFuture Solr API · respondent_count = Course_Quality_NumberOfRespondents
-            (verified) · upcoming_run_count = doclist.numFound per course group
-          </p>
-          <p>
-            HUSTLE SG = HUSTLE INSTITUTE PTE. LTD. + HUSTLE ACADEMY PTE. LTD. (aggregated) ·
-            14 courses currently indexed · 39 verified on MySkillsFuture ·
-            HUSTLE ACADEMY pending next scrape cycle
-          </p>
-          <p>
-            Attendee counts are sourced directly from MySkillsFuture and are not estimated.
-            Run counts display &quot;data pending&quot; until verified source data is available.
-          </p>
+        {/* ══ LEADERBOARD ══ */}
+        <div className="rounded-xl border border-slate-800/60 overflow-hidden">
+
+          {/* Column headers */}
+          <div className="grid grid-cols-[2.5rem_1fr_auto] items-center px-5 py-2 bg-slate-900/60 border-b border-slate-800/60 text-[10px] font-mono text-slate-600 tracking-widest uppercase gap-4">
+            <span>#</span>
+            <span>Provider / Top Course</span>
+            <span className="text-right">Runs · Demand</span>
+          </div>
+
+          {rows.map((r, i) => {
+            const d = demand(r.topRuns)
+            const c = color(r.name)
+            const barPct = maxRuns > 0 ? Math.max(1, Math.round((r.topRuns / maxRuns) * 100)) : 0
+            const barColor = r.topRuns >= 20 ? '#ef4444' : r.topRuns >= 5 ? '#f59e0b' : '#475569'
+
+            return (
+              <details
+                key={r.name}
+                className="group border-b border-slate-800/40 last:border-0"
+              >
+                {/* ── Clickable row ── */}
+                <summary className="grid grid-cols-[2.5rem_1fr_auto] items-center px-5 py-3.5 gap-4 cursor-pointer list-none [&::-webkit-details-marker]:hidden hover:bg-slate-800/30 transition-colors select-none">
+
+                  {/* Rank */}
+                  <span className="text-slate-600 font-mono text-sm text-center">{i + 1}</span>
+
+                  {/* Provider + course */}
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 mb-1.5">
+                      <span className="font-bold text-xs tracking-widest font-mono" style={{ color: c }}>
+                        {r.name.toUpperCase()}
+                      </span>
+                      {r.isHustle && (
+                        <span className="text-[9px] font-mono bg-violet-900/50 text-violet-400 border border-violet-800/60 px-1.5 py-px rounded">
+                          YOU
+                        </span>
+                      )}
+                      <span className="text-slate-700 text-[10px] font-mono ml-auto group-open:rotate-180 transition-transform">▾</span>
+                    </div>
+                    {r.topCourse && (
+                      <a
+                        href={SF_URL(r.topCourse.sf_ref_no)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-slate-200 text-sm hover:text-orange-400 transition-colors"
+                        onClick={e => e.stopPropagation()}
+                      >
+                        {r.topCourse.title} ↗
+                      </a>
+                    )}
+                    {/* Progress bar */}
+                    <div className="mt-2 h-0.5 w-full bg-slate-800 rounded-full overflow-hidden">
+                      <div
+                        className="h-full rounded-full transition-all"
+                        style={{ width: `${barPct}%`, backgroundColor: barColor }}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Runs + demand */}
+                  <div className="text-right shrink-0 w-28">
+                    {hasRunData ? (
+                      <a
+                        href={r.topCourse ? SCHED_URL(r.topCourse.sf_ref_no) : '#'}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-block hover:opacity-80 transition-opacity"
+                        onClick={e => e.stopPropagation()}
+                      >
+                        <span className="font-bold font-mono text-2xl text-slate-100">{r.topRuns}</span>
+                        <span className="text-slate-500 text-xs font-mono ml-1">RUNS</span>
+                      </a>
+                    ) : (
+                      <span className="text-slate-600 font-mono text-xs">PENDING</span>
+                    )}
+                    <div className={`text-xs font-mono mt-0.5 ${d.cls}`}>
+                      {d.icon} {d.label}
+                    </div>
+                  </div>
+                </summary>
+
+                {/* ── Expanded: top 3 courses ── */}
+                <div className="px-5 pb-4 pt-1 bg-slate-900/40 border-t border-slate-800/40">
+                  <p className="text-[10px] font-mono text-slate-600 tracking-widest uppercase mb-3">
+                    Top 3 Courses by Upcoming Runs
+                  </p>
+                  <div className="space-y-3">
+                    {r.top3.map((c2, j) => {
+                      const runs2 = c2.upcoming_run_count ?? 0
+                      const att   = c2.respondent_count ?? 0
+                      return (
+                        <div key={c2.sf_ref_no} className="flex items-start gap-3">
+                          <span className="text-xl shrink-0 leading-none">{MEDALS[j] ?? `${j + 1}.`}</span>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-baseline justify-between gap-3 flex-wrap">
+                              <a
+                                href={SF_URL(c2.sf_ref_no)}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-slate-200 text-sm font-medium hover:text-orange-400 transition-colors"
+                              >
+                                {c2.title} ↗
+                              </a>
+                              <div className="shrink-0 flex items-baseline gap-2">
+                                {hasRunData ? (
+                                  <a
+                                    href={SCHED_URL(c2.sf_ref_no)}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="font-bold font-mono text-orange-400 hover:text-orange-300 transition-colors"
+                                  >
+                                    {runs2} <span className="text-slate-500 text-xs">Runs ↗</span>
+                                  </a>
+                                ) : (
+                                  <span className="text-slate-600 font-mono text-xs">—</span>
+                                )}
+                                {att > 0 && (
+                                  <span className="text-slate-500 text-xs">
+                                    · {att >= 1000 ? `${(att / 1000).toFixed(1)}K` : att} Attended
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-3 mt-1 text-[11px] text-slate-600">
+                              <span>{c2.provider_name}</span>
+                              {c2.category_text && <span>· {c2.category_text}</span>}
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              </details>
+            )
+          })}
+        </div>
+
+        {/* ══ FOOTER ══ */}
+        <footer className="text-[10px] font-mono text-slate-700 space-y-0.5 pb-4">
+          <p>SOURCE: MySkillsFuture Solr API · upcoming_run_count = doclist.numFound per course group (= &quot;Showing 1–X of <strong className="text-slate-600">N course runs</strong>&quot; on the Schedule tab)</p>
+          <p>HUSTLE SG = HUSTLE INSTITUTE PTE. LTD. + HUSTLE ACADEMY PTE. LTD. · {totalCourses} courses indexed · attendee counts from Course_Quality_NumberOfRespondents (verified)</p>
         </footer>
 
       </div>
