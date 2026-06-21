@@ -210,7 +210,7 @@ export default async function CourseIntelligencePage() {
         {/* ══ PODIUM — TOP 3 ══ */}
         <div className="grid grid-cols-3 gap-3">
           {podium.map((r, i) => {
-            const d = demand(r.topRuns)
+            const dmnd = demand(r.topRuns)
             const c = color(r.name)
             const icons = ['🏆', '🥈', '🥉']
             const sizes = ['text-5xl', 'text-4xl', 'text-4xl']
@@ -251,8 +251,8 @@ export default async function CourseIntelligencePage() {
                     {r.topCourse.title} ↗
                   </a>
                 )}
-                <div className={`text-xs font-mono mt-auto ${d.cls}`}>
-                  {d.icon} {d.label}
+                <div className={`text-xs font-mono mt-auto ${dmnd.cls}`}>
+                  {dmnd.icon} {dmnd.label}
                 </div>
               </div>
             )
@@ -270,7 +270,7 @@ export default async function CourseIntelligencePage() {
           </div>
 
           {rows.map((r, i) => {
-            const d = demand(r.topRuns)
+            const dmnd = demand(r.topRuns)
             const c = color(r.name)
             const barPct = maxRuns > 0 ? Math.max(1, Math.round((r.topRuns / maxRuns) * 100)) : 0
             const barColor = r.topRuns >= 20 ? '#ef4444' : r.topRuns >= 5 ? '#f59e0b' : '#475569'
@@ -305,7 +305,6 @@ export default async function CourseIntelligencePage() {
                         target="_blank"
                         rel="noopener noreferrer"
                         className="text-slate-200 text-sm hover:text-orange-400 transition-colors"
-                        onClick={e => e.stopPropagation()}
                       >
                         {r.topCourse.title} ↗
                       </a>
@@ -327,7 +326,6 @@ export default async function CourseIntelligencePage() {
                         target="_blank"
                         rel="noopener noreferrer"
                         className="inline-block hover:opacity-80 transition-opacity"
-                        onClick={e => e.stopPropagation()}
                       >
                         <span className="font-bold font-mono text-2xl text-slate-100">{r.topRuns}</span>
                         <span className="text-slate-500 text-xs font-mono ml-1">RUNS</span>
@@ -335,8 +333,8 @@ export default async function CourseIntelligencePage() {
                     ) : (
                       <span className="text-slate-600 font-mono text-xs">PENDING</span>
                     )}
-                    <div className={`text-xs font-mono mt-0.5 ${d.cls}`}>
-                      {d.icon} {d.label}
+                    <div className={`text-xs font-mono mt-0.5 ${dmnd.cls}`}>
+                      {dmnd.icon} {dmnd.label}
                     </div>
                   </div>
                 </summary>
