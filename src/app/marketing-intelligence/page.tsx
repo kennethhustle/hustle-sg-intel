@@ -84,7 +84,7 @@ const RAW_DATA: Competitor[] = [
   },
   {
     name: 'Vertical Institute', color: '#f59e0b',
-    metaAds: 49, googleAds: 61, googleRating: 4.8, googleReviews: 2754, sfRuns: 23, sfRespondents: 6057,
+    metaAds: 49, googleAds: 61, googleRating: 5.0, googleReviews: 8188, sfRuns: 23, sfRespondents: 6057,
     reviewUrl:    'https://www.google.com/maps/search/Vertical+Institute+Singapore',
     metaAdsUrl:   'https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=SG&q=Vertical+Institute&search_type=keyword_unordered',
     googleAdsUrl: 'https://adstransparency.google.com/?region=SG&q=Vertical+Institute',
