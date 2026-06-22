@@ -1,4 +1,5 @@
 import { createServiceClient } from '@/lib/supabase/server'
+import { AppLayout } from '@/components/layout/app-layout'
 
 export const revalidate = 300
 
@@ -152,12 +153,14 @@ export default async function CourseIntelligencePage() {
 
   if (!d) {
     return (
-      <div className="min-h-screen bg-[#0c0c10] flex items-center justify-center font-mono">
-        <div className="text-center">
-          <p className="text-slate-400 text-sm">MYSKILLSFUTURE DEMAND INTELLIGENCE</p>
-          <p className="text-slate-600 text-xs mt-2">No data available. Run sf-refresh cron.</p>
+      <AppLayout title="MySkillsFuture Intelligence">
+        <div className="flex items-center justify-center h-64 font-mono">
+          <div className="text-center">
+            <p className="text-slate-400 text-sm">MYSKILLSFUTURE DEMAND INTELLIGENCE</p>
+            <p className="text-slate-600 text-xs mt-2">No data available. Run sf-refresh cron.</p>
+          </div>
         </div>
-      </div>
+      </AppLayout>
     )
   }
 
@@ -166,33 +169,20 @@ export default async function CourseIntelligencePage() {
   const podium = rows.slice(0, 3)
 
   return (
-    <div className="min-h-screen bg-[#0c0c10] text-slate-100 font-sans">
+    <AppLayout title="MySkillsFuture Intelligence" lastUpdated={lastScraped}>
+      <div className="space-y-6">
 
-      {/* ══ HEADER BAR ══ */}
-      <header className="sticky top-0 z-50 bg-[#0c0c10]/95 backdrop-blur border-b border-slate-800/60 px-6 py-2.5">
-        <div className="max-w-6xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-2 font-mono text-sm font-bold tracking-wide">
-            <span className="text-slate-100">HUSTLE</span>
-            <span className="text-slate-600">/</span>
-            <span className="text-orange-400">INTEL</span>
-            <span className="mx-2 flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-              <span className="text-green-400 text-xs font-normal">LIVE MONITORING</span>
-            </span>
-            <span className="text-slate-600 text-xs font-normal">·</span>
-            <span className="text-slate-400 text-xs font-normal">{totalEntities} ENTITIES</span>
-          </div>
-          <div className="font-mono text-xs text-slate-500 flex items-center gap-3">
-            <span>DATA: {date}</span>
-            <span className="w-px h-3 bg-slate-700" />
-            <span className="text-slate-300">{time}</span>
-            <span className="w-px h-3 bg-slate-700" />
-            <span>SGT</span>
-          </div>
+        {/* ══ STATUS ROW ══ */}
+        <div className="flex items-center gap-3 font-mono text-xs text-slate-500">
+          <span className="flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+            <span className="text-green-400">LIVE MONITORING</span>
+          </span>
+          <span className="text-slate-700">·</span>
+          <span>{totalEntities} providers tracked</span>
+          <span className="text-slate-700">·</span>
+          <span>DATA: {date} {time} SGT</span>
         </div>
-      </header>
-
-      <div className="max-w-6xl mx-auto px-6 py-6 space-y-6">
 
         {/* ══ RUN DATA PENDING BANNER ══ */}
         {!hasRunData && (
@@ -405,6 +395,6 @@ export default async function CourseIntelligencePage() {
         </footer>
 
       </div>
-    </div>
+    </AppLayout>
   )
 }
