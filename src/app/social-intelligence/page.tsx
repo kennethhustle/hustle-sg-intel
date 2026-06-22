@@ -10,6 +10,7 @@
  * 6. What should management do?
  */
 
+import type { ReactNode } from 'react'
 import { createClient } from '@/lib/supabase/server'
 import { AppLayout } from '@/components/layout/app-layout'
 
@@ -254,7 +255,7 @@ async function getData() {
   }
 }
 
-function buildRecommendation(hustle: { courseTotal: number; ytSubs: number | null; themes: Array<{theme:string;pct:number}> }, courseRank: number, gap: number, ytTotal: number, ytRank: number): string {
+function buildRecommendation(hustle: { courseTotal: number; ytSubs: number | null; themes: Array<{theme:string;pct:number}> }, courseRank: number, gap: number, _ytTotal: number, ytRank: number): string {
   const parts: string[] = []
   if (courseRank > 1) {
     parts.push(`Add ${gap} more course dates to reach #1 in market availability.`)
@@ -268,19 +269,8 @@ function buildRecommendation(hustle: { courseTotal: number; ytSubs: number | nul
   return parts.slice(0, 2).join(' ')
 }
 
-// ─── Stat card ────────────────────────────────────────────────────────────────
-function StatCard({ label, value, sub, accent }: { label: string; value: string; sub?: string; accent?: string }) {
-  return (
-    <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-4">
-      <div className="text-[10px] font-mono tracking-widest uppercase text-slate-500 mb-1">{label}</div>
-      <div className={`text-2xl font-bold font-mono ${accent ?? 'text-white'}`}>{value}</div>
-      {sub && <div className="text-[11px] text-slate-500 mt-0.5">{sub}</div>}
-    </div>
-  )
-}
-
 // ─── Section header ───────────────────────────────────────────────────────────
-function H2({ children, sub }: { children: React.ReactNode; sub?: string }) {
+function H2({ children, sub }: { children: ReactNode; sub?: string }) {
   return (
     <div className="mb-5">
       <h2 className="text-base font-bold text-white tracking-tight">{children}</h2>
