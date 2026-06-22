@@ -10,7 +10,7 @@
  *
  * Data sources (last refreshed: 2026-06-22):
  * - Meta Ads: Meta Ad Library API (live counts)
- * - Google Reviews/Ratings: Google Business Profile (seeded)
+ * - Google Reviews/Ratings: Google Maps (verified 2026-06-22)
  * - Google Ads: Estimated from Google Ads Transparency
  * - SF Runs & Respondents: Supabase sf_courses table (live)
  */
@@ -36,6 +36,12 @@ interface Competitor {
   googleReviews: number
   sfRuns: number
   sfRespondents: number
+  // Source links
+  reviewUrl: string
+  metaAdsUrl: string
+  googleAdsUrl: string
+  sfUrl: string
+  // Computed
   threatScore?: number
   threatLevel?: ThreatLevel
   metaRank?: number
@@ -44,16 +50,86 @@ interface Competitor {
 }
 
 const RAW_DATA: Competitor[] = [
-  { name: 'ASK Training',       color: '#ef4444', metaAds: 149, googleAds: 400,  googleRating: 4.9, googleReviews: 1476, sfRuns: 43,  sfRespondents: 23419  },
-  { name: 'BELLS Institute',    color: '#f97316', metaAds: 149, googleAds: 200,  googleRating: 4.7, googleReviews: 1200, sfRuns: 109, sfRespondents: 100257 },
-  { name: 'Hustle SG',          color: '#6366f1', isHustle: true, metaAds: 79, googleAds: 35, googleRating: 4.8, googleReviews: 95, sfRuns: 65, sfRespondents: 2653 },
-  { name: 'Info-Tech Academy',  color: '#06b6d4', metaAds: 50,  googleAds: 80,   googleRating: 4.6, googleReviews: 320,  sfRuns: 91,  sfRespondents: 10401  },
-  { name: 'Vertical Institute', color: '#f59e0b', metaAds: 49,  googleAds: 61,   googleRating: 4.8, googleReviews: 2670, sfRuns: 23,  sfRespondents: 6057   },
-  { name: 'Happy Together',     color: '#10b981', metaAds: 43,  googleAds: 25,   googleRating: 4.7, googleReviews: 180,  sfRuns: 4,   sfRespondents: 1950   },
-  { name: 'Equinet Academy',    color: '#14b8a6', metaAds: 39,  googleAds: 120,  googleRating: 4.9, googleReviews: 580,  sfRuns: 17,  sfRespondents: 3668   },
-  { name: 'OOm Pte Ltd',        color: '#8b5cf6', metaAds: 13,  googleAds: 30,   googleRating: 4.8, googleReviews: 230,  sfRuns: 31,  sfRespondents: 9796   },
-  { name: 'Skills Dev Academy', color: '#3b82f6', metaAds: 4,   googleAds: 50,   googleRating: 4.8, googleReviews: 850,  sfRuns: 16,  sfRespondents: 98486  },
-  { name: 'Heicoders Academy',  color: '#ec4899', metaAds: 0,   googleAds: 40,   googleRating: 4.9, googleReviews: 150,  sfRuns: 31,  sfRespondents: 2242   },
+  {
+    name: 'ASK Training', color: '#ef4444',
+    metaAds: 149, googleAds: 400, googleRating: 4.8, googleReviews: 1478, sfRuns: 43, sfRespondents: 23419,
+    reviewUrl:    'https://www.google.com/maps/search/ASK+Training+Singapore',
+    metaAdsUrl:   'https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=SG&q=ASK+Training&search_type=keyword_unordered',
+    googleAdsUrl: 'https://adstransparency.google.com/?region=SG&q=ASK+Training',
+    sfUrl:        'https://www.myskillsfuture.gov.sg/content/portal/en/training-exchange/course-directory.html?ftsquery=ASK+Training',
+  },
+  {
+    name: 'BELLS Institute', color: '#f97316',
+    metaAds: 149, googleAds: 200, googleRating: 4.9, googleReviews: 4200, sfRuns: 109, sfRespondents: 100257,
+    reviewUrl:    'https://www.google.com/maps/search/BELLS+Institute+Singapore',
+    metaAdsUrl:   'https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=SG&q=BELLS+Institute&search_type=keyword_unordered',
+    googleAdsUrl: 'https://adstransparency.google.com/?region=SG&q=BELLS+Institute',
+    sfUrl:        'https://www.myskillsfuture.gov.sg/content/portal/en/training-exchange/course-directory.html?ftsquery=BELLS+Institute',
+  },
+  {
+    name: 'Hustle SG', color: '#6366f1', isHustle: true,
+    metaAds: 79, googleAds: 35, googleRating: 4.8, googleReviews: 95, sfRuns: 65, sfRespondents: 2653,
+    reviewUrl:    'https://www.google.com/maps/search/Hustle+digital+marketing+training+Singapore',
+    metaAdsUrl:   'https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=SG&q=Hustle+SG&search_type=keyword_unordered',
+    googleAdsUrl: 'https://adstransparency.google.com/?region=SG&q=Hustle+SG',
+    sfUrl:        'https://www.myskillsfuture.gov.sg/content/portal/en/training-exchange/course-directory.html?ftsquery=Hustle',
+  },
+  {
+    name: 'Info-Tech Academy', color: '#06b6d4',
+    metaAds: 50, googleAds: 80, googleRating: 4.9, googleReviews: 5163, sfRuns: 91, sfRespondents: 10401,
+    reviewUrl:    'https://www.google.com/maps/search/Info-Tech+Learning+Centre+Singapore',
+    metaAdsUrl:   'https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=SG&q=Info-Tech+Academy&search_type=keyword_unordered',
+    googleAdsUrl: 'https://adstransparency.google.com/?region=SG&q=Info-Tech+Academy',
+    sfUrl:        'https://www.myskillsfuture.gov.sg/content/portal/en/training-exchange/course-directory.html?ftsquery=Info-Tech',
+  },
+  {
+    name: 'Vertical Institute', color: '#f59e0b',
+    metaAds: 49, googleAds: 61, googleRating: 4.8, googleReviews: 2754, sfRuns: 23, sfRespondents: 6057,
+    reviewUrl:    'https://www.google.com/maps/search/Vertical+Institute+Singapore',
+    metaAdsUrl:   'https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=SG&q=Vertical+Institute&search_type=keyword_unordered',
+    googleAdsUrl: 'https://adstransparency.google.com/?region=SG&q=Vertical+Institute',
+    sfUrl:        'https://www.myskillsfuture.gov.sg/content/portal/en/training-exchange/course-directory.html?ftsquery=Vertical+Institute',
+  },
+  {
+    name: 'Happy Together', color: '#10b981',
+    metaAds: 43, googleAds: 25, googleRating: 4.7, googleReviews: 180, sfRuns: 4, sfRespondents: 1950,
+    reviewUrl:    'https://www.google.com/maps/search/Happy+Together+training+Singapore',
+    metaAdsUrl:   'https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=SG&q=Happy+Together&search_type=keyword_unordered',
+    googleAdsUrl: 'https://adstransparency.google.com/?region=SG&q=Happy+Together',
+    sfUrl:        'https://www.myskillsfuture.gov.sg/content/portal/en/training-exchange/course-directory.html?ftsquery=Happy+Together',
+  },
+  {
+    name: 'Equinet Academy', color: '#14b8a6',
+    metaAds: 39, googleAds: 120, googleRating: 4.9, googleReviews: 151, sfRuns: 17, sfRespondents: 3668,
+    reviewUrl:    'https://www.google.com/maps/search/Equinet+Academy+Singapore',
+    metaAdsUrl:   'https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=SG&q=Equinet+Academy&search_type=keyword_unordered',
+    googleAdsUrl: 'https://adstransparency.google.com/?region=SG&q=Equinet+Academy',
+    sfUrl:        'https://www.myskillsfuture.gov.sg/content/portal/en/training-exchange/course-directory.html?ftsquery=Equinet',
+  },
+  {
+    name: 'OOm Pte Ltd', color: '#8b5cf6',
+    metaAds: 13, googleAds: 30, googleRating: 4.8, googleReviews: 306, sfRuns: 31, sfRespondents: 9796,
+    reviewUrl:    'https://www.google.com/maps/place/OOm+Pte+Ltd/@1.3014488,103.8372499,17z',
+    metaAdsUrl:   'https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=SG&q=OOm&search_type=keyword_unordered',
+    googleAdsUrl: 'https://adstransparency.google.com/?region=SG&q=OOm+Pte+Ltd',
+    sfUrl:        'https://www.myskillsfuture.gov.sg/content/portal/en/training-exchange/course-directory.html?ftsquery=OOm',
+  },
+  {
+    name: 'Skills Dev Academy', color: '#3b82f6',
+    metaAds: 4, googleAds: 50, googleRating: 4.5, googleReviews: 15891, sfRuns: 16, sfRespondents: 98486,
+    reviewUrl:    'https://www.google.com/search?q=Skills+Development+Academy+Singapore+reviews',
+    metaAdsUrl:   'https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=SG&q=Skills+Development+Academy&search_type=keyword_unordered',
+    googleAdsUrl: 'https://adstransparency.google.com/?region=SG&q=Skills+Development+Academy',
+    sfUrl:        'https://www.myskillsfuture.gov.sg/content/portal/en/training-exchange/course-directory.html?ftsquery=Skills+Development+Academy',
+  },
+  {
+    name: 'Heicoders Academy', color: '#ec4899',
+    metaAds: 0, googleAds: 40, googleRating: 4.9, googleReviews: 3569, sfRuns: 31, sfRespondents: 2242,
+    reviewUrl:    'https://www.google.com/maps/search/Heicoders+Academy+Singapore',
+    metaAdsUrl:   'https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=SG&q=Heicoders&search_type=keyword_unordered',
+    googleAdsUrl: 'https://adstransparency.google.com/?region=SG&q=Heicoders+Academy',
+    sfUrl:        'https://www.myskillsfuture.gov.sg/content/portal/en/training-exchange/course-directory.html?ftsquery=Heicoders',
+  },
 ]
 
 // ─── Threat Score engine ──────────────────────────────────────────────────────
@@ -157,12 +233,12 @@ const RECOMMENDATIONS = buildRecommendation(hustle)
 
 // ─── Alerts (seeded from real competitive signals) ───────────────────────────
 const ALERTS = [
-  { severity: 'critical', text: 'ASK Training running 149 active Meta ads — equal highest in market with BELLS.', sub: 'Focus: AI-Powered Marketing, Finance, HR, Supply Chain training.' },
-  { severity: 'critical', text: 'BELLS Institute running 149 active Meta ads AND 109 upcoming SF course runs.', sub: 'Dominant across both paid demand and scheduled capacity.' },
-  { severity: 'high',     text: 'Vertical Institute has 2,670 Google reviews — highest social proof in market.', sub: "Hustle has 95 reviews. Closing this gap requires urgent action." },
-  { severity: 'high',     text: "ASK Training estimated ~400 active Google ads — most in market by 2×.", sub: 'Capturing high-intent search traffic across all training categories.' },
-  { severity: 'medium',   text: "Skills Dev Academy has 98,486 SF respondents — 37× Hustle's student base.", sub: 'Signals deep SkillsFuture brand loyalty. Large incumbent advantage.' },
-  { severity: 'medium',   text: "Hustle ranks #3 in Meta Ads but #10 in Google Reviews.", sub: 'Strong paid visibility but weak social proof — convert students to reviewers.' },
+  { severity: 'critical', text: 'Skills Dev Academy has 15,891 Google reviews — 167× Hustle\'s 95.', sub: 'Dominant social proof. Hustle needs an urgent, sustained review campaign to close this gap.' },
+  { severity: 'critical', text: 'ASK Training + BELLS each running 149 active Meta ads — highest in market.', sub: 'Both focus: AI-Powered Marketing, Finance, HR, Supply Chain training.' },
+  { severity: 'critical', text: 'BELLS Institute has 109 upcoming SF course runs — most scheduled capacity in market.', sub: 'Dominant across both paid demand and SkillsFuture scheduling. Students find BELLS first.' },
+  { severity: 'high',     text: "ASK Training estimated ~400 active Google ads — 11× Hustle's ~35.", sub: 'Capturing high-intent search traffic across all training categories.' },
+  { severity: 'high',     text: 'Info-Tech Academy has 5,163 Google reviews (4.9★) — #2 in market for social proof.', sub: 'Hustle trails by 5,068 reviews. Review volume directly influences SkillsFuture course trust.' },
+  { severity: 'medium',   text: "Skills Dev Academy has 98,486 SF respondents AND BELLS has 100,257 — both 37×+ Hustle.", sub: 'Deep SkillsFuture brand loyalty. Large incumbent advantage across government-funded training.' },
 ]
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -300,8 +376,10 @@ export default function PerformanceIntelligencePage() {
                         </div>
                       </td>
                       <td className="py-3 px-4 text-right">
-                        <span className="text-yellow-400 font-bold">{c.googleRating}</span>
-                        <span className="text-slate-600 text-xs"> ★</span>
+                        <a href={c.reviewUrl} target="_blank" rel="noopener noreferrer" className="hover:opacity-80 transition-opacity">
+                          <span className="text-yellow-400 font-bold">{c.googleRating}</span>
+                          <span className="text-slate-600 text-xs"> ★</span>
+                        </a>
                       </td>
                       <td className="py-3 px-4 text-right">
                         <div className="flex items-center justify-end gap-2">
@@ -311,9 +389,14 @@ export default function PerformanceIntelligencePage() {
                               style={{ width: `${(c.googleReviews / maxRev) * 100}%` }}
                             />
                           </div>
-                          <span className="text-white font-mono text-xs w-14 text-right">
+                          <a
+                            href={c.reviewUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-white hover:text-yellow-400 font-mono text-xs w-14 text-right transition-colors underline decoration-slate-700 hover:decoration-yellow-400"
+                          >
                             {c.googleReviews.toLocaleString()}
-                          </span>
+                          </a>
                         </div>
                       </td>
                       <td className="py-3 px-4 text-right">
@@ -324,7 +407,14 @@ export default function PerformanceIntelligencePage() {
                               style={{ width: `${(c.googleAds / maxGAds) * 100}%` }}
                             />
                           </div>
-                          <span className="text-slate-300 font-mono text-xs w-10 text-right">~{c.googleAds}</span>
+                          <a
+                            href={c.googleAdsUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-slate-300 hover:text-blue-400 font-mono text-xs w-10 text-right transition-colors underline decoration-slate-700 hover:decoration-blue-400"
+                          >
+                            ~{c.googleAds}
+                          </a>
                         </div>
                       </td>
                       <td className="py-3 px-4 text-right">
@@ -335,11 +425,25 @@ export default function PerformanceIntelligencePage() {
                               style={{ width: `${(c.metaAds / maxMeta) * 100}%` }}
                             />
                           </div>
-                          <span className="text-slate-300 font-mono text-xs w-8 text-right">{c.metaAds}</span>
+                          <a
+                            href={c.metaAdsUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-slate-300 hover:text-red-400 font-mono text-xs w-8 text-right transition-colors underline decoration-slate-700 hover:decoration-red-400"
+                          >
+                            {c.metaAds}
+                          </a>
                         </div>
                       </td>
                       <td className="py-3 px-4 text-right">
-                        <span className="text-slate-300 font-mono text-xs">{c.sfRuns}</span>
+                        <a
+                          href={c.sfUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-slate-300 hover:text-orange-400 font-mono text-xs transition-colors underline decoration-slate-700 hover:decoration-orange-400"
+                        >
+                          {c.sfRuns}
+                        </a>
                       </td>
                       <td className="py-3 pl-4 text-right">
                         <ThreatBadge level={c.threatLevel!} />
@@ -506,10 +610,10 @@ export default function PerformanceIntelligencePage() {
 
         {/* ── Data sources footer ── */}
         <div className="text-[10px] text-slate-700 flex flex-wrap gap-4 pb-2">
-          <span>Meta Ads: Meta Ad Library API (live)</span>
-          <span>Google Reviews/Ratings: Google Business Profile</span>
-          <span>Google Ads: Google Ads Transparency (estimated)</span>
-          <span>SF Data: MySkillsFuture API via Supabase</span>
+          <a href="https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=SG" target="_blank" rel="noopener noreferrer" className="hover:text-slate-500 transition-colors">Meta Ads: Meta Ad Library (live)</a>
+          <a href="https://www.google.com/maps" target="_blank" rel="noopener noreferrer" className="hover:text-slate-500 transition-colors">Google Reviews: Google Maps (verified 22 Jun 2026)</a>
+          <a href="https://adstransparency.google.com/?region=SG" target="_blank" rel="noopener noreferrer" className="hover:text-slate-500 transition-colors">Google Ads: Google Ads Transparency (estimated)</a>
+          <a href="https://www.myskillsfuture.gov.sg/content/portal/en/training-exchange/course-directory.html" target="_blank" rel="noopener noreferrer" className="hover:text-slate-500 transition-colors">SF Data: MySkillsFuture via Supabase</a>
           <span>Updated: 22 Jun 2026</span>
         </div>
 
