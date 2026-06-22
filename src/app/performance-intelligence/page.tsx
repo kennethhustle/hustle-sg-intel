@@ -68,9 +68,9 @@ const RAW_DATA: Competitor[] = [
   },
   {
     name: 'Hustle SG', color: '#6366f1', isHustle: true,
-    metaAds: 79, googleAds: 35, googleRating: 4.8, googleReviews: 95, sfRuns: 65, sfRespondents: 2653,
+    metaAds: 80, googleAds: 35, googleRating: 4.8, googleReviews: 391, sfRuns: 65, sfRespondents: 2653,
     reviewUrl:    'https://www.google.com/maps/search/Hustle+digital+marketing+training+Singapore',
-    metaAdsUrl:   'https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=SG&q=Hustle+SG&search_type=keyword_unordered',
+    metaAdsUrl:   'https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=ALL&is_targeted_country=false&media_type=all&search_type=page&view_all_page_id=101842442237977',
     googleAdsUrl: 'https://adstransparency.google.com/?region=SG&q=Hustle+SG',
     sfUrl:        'https://www.myskillsfuture.gov.sg/content/portal/en/training-exchange/course-directory.html?ftsquery=Hustle',
   },
@@ -108,9 +108,9 @@ const RAW_DATA: Competitor[] = [
   },
   {
     name: 'OOm Pte Ltd', color: '#8b5cf6',
-    metaAds: 13, googleAds: 30, googleRating: 4.8, googleReviews: 306, sfRuns: 31, sfRespondents: 9796,
+    metaAds: 11, googleAds: 30, googleRating: 4.8, googleReviews: 306, sfRuns: 31, sfRespondents: 9796,
     reviewUrl:    'https://www.google.com/maps/place/OOm+Pte+Ltd/@1.3014488,103.8372499,17z',
-    metaAdsUrl:   'https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=SG&q=OOm&search_type=keyword_unordered',
+    metaAdsUrl:   'https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=SG&is_targeted_country=false&media_type=all&search_type=page&view_all_page_id=59400547335',
     googleAdsUrl: 'https://adstransparency.google.com/?region=SG&q=OOm+Pte+Ltd',
     sfUrl:        'https://www.myskillsfuture.gov.sg/content/portal/en/training-exchange/course-directory.html?ftsquery=OOm',
   },
@@ -124,9 +124,9 @@ const RAW_DATA: Competitor[] = [
   },
   {
     name: 'Heicoders Academy', color: '#ec4899',
-    metaAds: 0, googleAds: 40, googleRating: 4.9, googleReviews: 3569, sfRuns: 31, sfRespondents: 2242,
+    metaAds: 54, googleAds: 40, googleRating: 4.9, googleReviews: 3569, sfRuns: 31, sfRespondents: 2242,
     reviewUrl:    'https://www.google.com/maps/search/Heicoders+Academy+Singapore',
-    metaAdsUrl:   'https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=SG&q=Heicoders&search_type=keyword_unordered',
+    metaAdsUrl:   'https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=SG&is_targeted_country=false&media_type=all&search_type=page&view_all_page_id=103687161401464',
     googleAdsUrl: 'https://adstransparency.google.com/?region=SG&q=Heicoders+Academy',
     sfUrl:        'https://www.myskillsfuture.gov.sg/content/portal/en/training-exchange/course-directory.html?ftsquery=Heicoders',
   },
@@ -233,12 +233,12 @@ const RECOMMENDATIONS = buildRecommendation(hustle)
 
 // ─── Alerts (seeded from real competitive signals) ───────────────────────────
 const ALERTS = [
-  { severity: 'critical', text: 'Skills Dev Academy has 15,891 Google reviews — 167× Hustle\'s 95.', sub: 'Dominant social proof. Hustle needs an urgent, sustained review campaign to close this gap.' },
+  { severity: 'critical', text: "Skills Dev Academy has 15,891 Google reviews — 40× Hustle's 391.", sub: 'Dominant social proof. Hustle needs an urgent, sustained review campaign to close this gap.' },
   { severity: 'critical', text: 'ASK Training + BELLS each running 149 active Meta ads — highest in market.', sub: 'Both focus: AI-Powered Marketing, Finance, HR, Supply Chain training.' },
   { severity: 'critical', text: 'BELLS Institute has 109 upcoming SF course runs — most scheduled capacity in market.', sub: 'Dominant across both paid demand and SkillsFuture scheduling. Students find BELLS first.' },
   { severity: 'high',     text: "ASK Training estimated ~400 active Google ads — 11× Hustle's ~35.", sub: 'Capturing high-intent search traffic across all training categories.' },
-  { severity: 'high',     text: 'Info-Tech Academy has 5,163 Google reviews (4.9★) — #2 in market for social proof.', sub: 'Hustle trails by 5,068 reviews. Review volume directly influences SkillsFuture course trust.' },
-  { severity: 'medium',   text: "Skills Dev Academy has 98,486 SF respondents AND BELLS has 100,257 — both 37×+ Hustle.", sub: 'Deep SkillsFuture brand loyalty. Large incumbent advantage across government-funded training.' },
+  { severity: 'high',     text: 'Heicoders Academy running 54 active Meta ads — surprise entrant to top-5 Meta spenders.', sub: 'Previously not visible in Meta; now competing head-on in paid social with 3,569 Google reviews.' },
+  { severity: 'medium',   text: "Info-Tech Academy has 5,163 Google reviews (4.9★) — #2 in market for social proof.", sub: 'Hustle trails by 4,772 reviews. Review volume directly influences SkillsFuture course trust.' },
 ]
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -353,7 +353,6 @@ export default function PerformanceIntelligencePage() {
                   <th className="text-right pb-3 px-4">Google Reviews</th>
                   <th className="text-right pb-3 px-4">Google Ads</th>
                   <th className="text-right pb-3 px-4">Meta Ads</th>
-                  <th className="text-right pb-3 px-4">SF Runs</th>
                   <th className="text-right pb-3 pl-4">Threat Level</th>
                 </tr>
               </thead>
@@ -435,16 +434,6 @@ export default function PerformanceIntelligencePage() {
                           </a>
                         </div>
                       </td>
-                      <td className="py-3 px-4 text-right">
-                        <a
-                          href={c.sfUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-slate-300 hover:text-orange-400 font-mono text-xs transition-colors underline decoration-slate-700 hover:decoration-orange-400"
-                        >
-                          {c.sfRuns}
-                        </a>
-                      </td>
                       <td className="py-3 pl-4 text-right">
                         <ThreatBadge level={c.threatLevel!} />
                       </td>
@@ -455,8 +444,8 @@ export default function PerformanceIntelligencePage() {
             </table>
           </div>
           <p className="text-[10px] text-slate-600 mt-3">
-            Threat Score = Google Reviews 20% · Google Ads 25% · Meta Ads 25% · SF Attendees 20% · Course Runs 10%
-            &nbsp;·&nbsp; Google Ads are estimated · Meta Ads are live from Meta Ad Library API
+            Threat Score = Google Reviews 20% · Google Ads 25% · Meta Ads 25% · SF Attendees 20% · SF Runs 10%
+            &nbsp;·&nbsp; Google Ads estimated via Google Ads Transparency · Meta Ads live from Meta Ad Library API · Click any number to view source
           </p>
         </Section>
 
