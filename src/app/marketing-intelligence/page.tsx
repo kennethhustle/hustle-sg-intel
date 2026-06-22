@@ -255,7 +255,7 @@ export default function PerformanceIntelligencePage() {
         {/* Page header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-xl font-black tracking-tight text-white">Performance Intelligence</h1>
+            <h1 className="text-xl font-black tracking-tight text-white">Marketing Intelligence</h1>
             <p className="text-xs text-slate-500 mt-0.5">
               Who is buying demand · Google presence · Meta advertising · Last updated 22 Jun 2026
             </p>

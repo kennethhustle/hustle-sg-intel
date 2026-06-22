@@ -12,6 +12,7 @@ import {
   Bell,
   Settings,
   BarChart2,
+  Search,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -33,7 +34,8 @@ export function Sidebar({ unreadAlerts }: SidebarProps) {
     { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
     { label: 'Competitors', href: '/competitors', icon: Building2 },
     { label: 'Social Intelligence', href: '/social-intelligence', icon: TrendingUp },
-    { label: 'Performance Intelligence', href: '/performance-intelligence', icon: BarChart2 },
+    { label: 'Marketing Intelligence', href: '/marketing-intelligence', icon: BarChart2 },
+    { label: 'Search Intelligence', href: '/search-intelligence', icon: Search },
     { label: 'Hiring Intelligence', href: '/hiring-intelligence', icon: Users },
     { label: 'MySkillsFuture Intelligence', href: '/course-intelligence', icon: BookOpen },
     { label: 'Opportunity Engine', href: '/opportunity-engine', icon: Zap },
