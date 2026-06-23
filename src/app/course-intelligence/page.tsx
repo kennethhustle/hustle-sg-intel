@@ -7,10 +7,9 @@ export const revalidate = 300
 // CONSTANTS & HELPERS
 // ═══════════════════════════════════════════════════
 
-const SF_URL   = (ref: string) =>
+const SF_URL = (ref: string) =>
   `https://www.myskillsfuture.gov.sg/content/portal/en/training-exchange/course-directory/course-detail.html?courseReferenceNumber=${ref}`
 
-// Schedule tab lives on the same page — #schedule fragment
 const SCHED_URL = (ref: string) => `${SF_URL(ref)}#schedule`
 
 function fmtDT(iso: string) {
@@ -21,24 +20,28 @@ function fmtDT(iso: string) {
   }
 }
 
+function fmtScraped(iso: string) {
+  const d = new Date(iso)
+  return d.toLocaleDateString('en-SG', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Singapore' })
+}
+
 function isHustle(raw: string) { return raw.toUpperCase().includes('HUSTLE') }
 
 const GROUP: Record<string, string> = {
   'BELLS INSTITUTE OF HIGHER LEARNING PTE. LTD.': 'BELLS Institute',
-  'VERTICAL INSTITUTE PTE. LTD.': 'Vertical Institute',
-  'OOM PTE. LTD.': 'OOm Pte Ltd',
-  'SKILLS DEVELOPMENT ACADEMY PTE. LTD.': 'Skills Dev Academy',
-  'INFO-TECH SYSTEMS LTD.': 'InfoTech Academy',
-  '@ASK TRAINING PTE. LTD.': 'ASK Training',
-  'HEICODERS ACADEMY PRIVATE LIMITED': 'Heicoders Academy',
-  'HAPPY TOGETHER PTE. LTD.': 'Happy Together',
-  'EQUINET ACADEMY PRIVATE LIMITED': 'Equinet Academy',
-  'HUSTLE INSTITUTE PTE. LTD.': 'Hustle SG',
-  'HUSTLE ACADEMY PTE. LTD.': 'Hustle SG',
+  'VERTICAL INSTITUTE PTE. LTD.':                 'Vertical Institute',
+  'OOM PTE. LTD.':                                'OOm Pte Ltd',
+  'SKILLS DEVELOPMENT ACADEMY PTE. LTD.':         'Skills Dev Academy',
+  'INFO-TECH SYSTEMS LTD.':                       'InfoTech Academy',
+  '@ASK TRAINING PTE. LTD.':                      'ASK Training',
+  'HEICODERS ACADEMY PRIVATE LIMITED':            'Heicoders Academy',
+  'HAPPY TOGETHER PTE. LTD.':                     'Happy Together',
+  'EQUINET ACADEMY PRIVATE LIMITED':              'Equinet Academy',
+  'HUSTLE INSTITUTE PTE. LTD.':                   'Hustle SG',
+  'HUSTLE ACADEMY PTE. LTD.':                     'Hustle SG',
 }
 function grp(raw: string) { return isHustle(raw) ? 'Hustle SG' : (GROUP[raw] ?? raw) }
 
-// One distinct colour per provider — matches "LIVE MONITORING" terminal palette
 const COLORS: Record<string, string> = {
   'InfoTech Academy':   '#00d4e0',
   'Skills Dev Academy': '#ff5555',
@@ -53,13 +56,22 @@ const COLORS: Record<string, string> = {
 }
 function color(name: string) { return COLORS[name] ?? '#94a3b8' }
 
-// Demand level from run count — thresholds calibrated to screenshot
 function demand(runs: number): { label: string; icon: string; cls: string } {
   if (runs >= 20) return { label: 'VERY HIGH', icon: '🔥', cls: 'text-red-500' }
   if (runs >= 5)  return { label: 'HIGH',      icon: '⚡', cls: 'text-yellow-400' }
   if (runs >= 2)  return { label: 'MEDIUM',    icon: '◈',  cls: 'text-blue-400' }
   return              { label: 'LOW',      icon: '·',  cls: 'text-slate-500' }
 }
+
+// Providers shown in the debug validation table
+const DEBUG_PROVIDERS = new Set([
+  'HUSTLE INSTITUTE PTE. LTD.',
+  'HUSTLE ACADEMY PTE. LTD.',
+  '@ASK TRAINING PTE. LTD.',
+  'BELLS INSTITUTE OF HIGHER LEARNING PTE. LTD.',
+  'EQUINET ACADEMY PRIVATE LIMITED',
+  'VERTICAL INSTITUTE PTE. LTD.',
+])
 
 // ═══════════════════════════════════════════════════
 // TYPES
@@ -105,7 +117,7 @@ async function getData() {
     courses[0].scraped_at,
   )
 
-  // Group by normalised provider
+  // ── Group by normalised provider ──
   const pMap = new Map<string, Course[]>()
   for (const c of courses) {
     const k = grp(c.provider_name)
@@ -124,13 +136,22 @@ async function getData() {
     }
   })
 
-  // Sort purely by top course run count DESC (no Hustle pin — honest leaderboard)
-  // Only show providers where at least one course has a real run count
+  // Only providers with at least one course with a real run count
   const activeRows = rows.filter(r => r.topRuns > 0)
   activeRows.sort((a, b) => b.topRuns - a.topRuns)
 
-  const maxRuns   = activeRows[0]?.topRuns ?? 1
+  const maxRuns    = activeRows[0]?.topRuns ?? 1
   const hasRunData = activeRows.length > 0
+
+  // ── Debug table: selected providers, sorted by provider then run count DESC ──
+  const debugCourses = courses
+    .filter(c => DEBUG_PROVIDERS.has(c.provider_name))
+    .sort((a, b) => {
+      const pa = grp(a.provider_name)
+      const pb = grp(b.provider_name)
+      if (pa !== pb) return pa.localeCompare(pb)
+      return (b.upcoming_run_count ?? 0) - (a.upcoming_run_count ?? 0)
+    })
 
   return {
     rows: activeRows,
@@ -139,6 +160,7 @@ async function getData() {
     lastScraped,
     totalCourses: courses.length,
     totalEntities: activeRows.length,
+    debugCourses,
   }
 }
 
@@ -164,7 +186,7 @@ export default async function CourseIntelligencePage() {
     )
   }
 
-  const { rows, maxRuns, hasRunData, lastScraped, totalCourses, totalEntities } = d
+  const { rows, maxRuns, hasRunData, lastScraped, totalCourses, totalEntities, debugCourses } = d
   const { date, time } = fmtDT(lastScraped)
   const podium = rows.slice(0, 3)
 
@@ -198,6 +220,19 @@ export default async function CourseIntelligencePage() {
             </div>
           </div>
         )}
+
+        {/* ══ DATA QUALITY NOTE ══ */}
+        <div className="flex items-start gap-3 bg-amber-950/20 border border-amber-800/30 rounded-lg px-4 py-3">
+          <span className="text-amber-400 text-sm shrink-0 font-mono">⚠</span>
+          <div className="text-xs text-amber-700 font-mono leading-relaxed">
+            <span className="text-amber-500 font-semibold">DATA SOURCE:</span>{' '}
+            upcoming_run_count is sourced from the MySF API (scraped daily at 01:00 SGT). The API may include
+            provider-planned unpublished run slots that are not yet publicly visible on the MySF schedule page.
+            Values shown are direct DB values — verify against the{' '}
+            <span className="text-amber-500">↗ schedule links</span> below for confirmation.
+            Run count = 0 courses are excluded from this view.
+          </div>
+        </div>
 
         {/* ══ PODIUM — TOP 3 ══ */}
         <div className="grid grid-cols-3 gap-3">
@@ -235,7 +270,7 @@ export default async function CourseIntelligencePage() {
                 </div>
                 {r.topCourse && (
                   <a
-                    href={SF_URL(r.topCourse.sf_ref_no)}
+                    href={SCHED_URL(r.topCourse.sf_ref_no)}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-slate-400 text-xs hover:text-slate-200 transition-colors line-clamp-2 leading-snug"
@@ -254,7 +289,6 @@ export default async function CourseIntelligencePage() {
         {/* ══ LEADERBOARD ══ */}
         <div className="rounded-xl border border-slate-800/60 overflow-hidden">
 
-          {/* Column headers */}
           <div className="grid grid-cols-[2.5rem_1fr_auto] items-center px-5 py-2 bg-slate-900/60 border-b border-slate-800/60 text-[10px] font-mono text-slate-600 tracking-widest uppercase gap-4">
             <span>#</span>
             <span>Provider / Top Course</span>
@@ -272,13 +306,10 @@ export default async function CourseIntelligencePage() {
                 key={r.name}
                 className="group border-b border-slate-800/40 last:border-0"
               >
-                {/* ── Clickable row ── */}
                 <summary className="grid grid-cols-[2.5rem_1fr_auto] items-center px-5 py-3.5 gap-4 cursor-pointer list-none [&::-webkit-details-marker]:hidden hover:bg-slate-800/30 transition-colors select-none">
 
-                  {/* Rank */}
                   <span className="text-slate-600 font-mono text-sm text-center">{i + 1}</span>
 
-                  {/* Provider + course */}
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 mb-1.5">
                       <span className="font-bold text-xs tracking-widest font-mono" style={{ color: c }}>
@@ -293,7 +324,7 @@ export default async function CourseIntelligencePage() {
                     </div>
                     {r.topCourse && (
                       <a
-                        href={SF_URL(r.topCourse.sf_ref_no)}
+                        href={SCHED_URL(r.topCourse.sf_ref_no)}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="text-slate-200 text-sm hover:text-orange-400 transition-colors"
@@ -301,7 +332,6 @@ export default async function CourseIntelligencePage() {
                         {r.topCourse.title} ↗
                       </a>
                     )}
-                    {/* Progress bar */}
                     <div className="mt-2 h-0.5 w-full bg-slate-800 rounded-full overflow-hidden">
                       <div
                         className="h-full rounded-full transition-all"
@@ -310,7 +340,6 @@ export default async function CourseIntelligencePage() {
                     </div>
                   </div>
 
-                  {/* Runs + demand */}
                   <div className="text-right shrink-0 w-28">
                     {hasRunData ? (
                       <a
@@ -334,7 +363,7 @@ export default async function CourseIntelligencePage() {
                 {/* ── Expanded: top 3 courses ── */}
                 <div className="px-5 pb-4 pt-1 bg-slate-900/40 border-t border-slate-800/40">
                   <p className="text-[10px] font-mono text-slate-600 tracking-widest uppercase mb-3">
-                    Top 3 Courses by Upcoming Runs
+                    Top 3 Courses by Upcoming Run Count
                   </p>
                   <div className="space-y-3">
                     {r.top3.map((c2, j) => {
@@ -354,7 +383,7 @@ export default async function CourseIntelligencePage() {
                                 {c2.title} ↗
                               </a>
                               <div className="shrink-0 flex items-baseline gap-2">
-                                {hasRunData ? (
+                                {runs2 > 0 ? (
                                   <a
                                     href={SCHED_URL(c2.sf_ref_no)}
                                     target="_blank"
@@ -364,7 +393,7 @@ export default async function CourseIntelligencePage() {
                                     {runs2} <span className="text-slate-500 text-xs">Runs ↗</span>
                                   </a>
                                 ) : (
-                                  <span className="text-slate-600 font-mono text-xs">—</span>
+                                  <span className="text-slate-600 font-mono text-xs">RUN COUNT NOT VERIFIED</span>
                                 )}
                                 {att > 0 && (
                                   <span className="text-slate-500 text-xs">
@@ -374,7 +403,7 @@ export default async function CourseIntelligencePage() {
                               </div>
                             </div>
                             <div className="flex items-center gap-3 mt-1 text-[11px] text-slate-600">
-                              <span>{c2.provider_name}</span>
+                              <span className="font-mono">{c2.sf_ref_no}</span>
                               {c2.category_text && <span>· {c2.category_text}</span>}
                             </div>
                           </div>
@@ -388,10 +417,115 @@ export default async function CourseIntelligencePage() {
           })}
         </div>
 
+        {/* ══ VALIDATION DEBUG TABLE ══ */}
+        <details className="group rounded-xl border border-slate-800/60 overflow-hidden">
+          <summary className="flex items-center justify-between px-5 py-3 bg-slate-900/60 cursor-pointer list-none [&::-webkit-details-marker]:hidden hover:bg-slate-800/40 transition-colors select-none">
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-mono text-slate-400 tracking-widest uppercase">🔬 Validation Debug Table</span>
+              <span className="text-[10px] font-mono text-slate-600">Hustle · ASK · BELLS · Equinet · Vertical</span>
+            </div>
+            <span className="text-slate-700 text-[10px] font-mono group-open:rotate-180 transition-transform">▾</span>
+          </summary>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs font-mono">
+              <thead>
+                <tr className="border-b border-slate-800/60 bg-slate-900/40">
+                  <th className="text-left px-4 py-2 text-[10px] text-slate-600 tracking-widest uppercase font-normal whitespace-nowrap">Provider</th>
+                  <th className="text-left px-4 py-2 text-[10px] text-slate-600 tracking-widest uppercase font-normal">Course</th>
+                  <th className="text-right px-4 py-2 text-[10px] text-slate-600 tracking-widest uppercase font-normal whitespace-nowrap">Run Count</th>
+                  <th className="text-right px-4 py-2 text-[10px] text-slate-600 tracking-widest uppercase font-normal whitespace-nowrap">Attended</th>
+                  <th className="text-left px-4 py-2 text-[10px] text-slate-600 tracking-widest uppercase font-normal whitespace-nowrap">Ref No</th>
+                  <th className="text-left px-4 py-2 text-[10px] text-slate-600 tracking-widest uppercase font-normal whitespace-nowrap">Source</th>
+                  <th className="text-left px-4 py-2 text-[10px] text-slate-600 tracking-widest uppercase font-normal whitespace-nowrap">Scraped At</th>
+                </tr>
+              </thead>
+              <tbody>
+                {debugCourses.map((c, idx) => {
+                  const provName = grp(c.provider_name)
+                  const clr = color(provName)
+                  const runs = c.upcoming_run_count ?? 0
+                  const att  = c.respondent_count ?? 0
+                  const isZero = runs === 0
+                  return (
+                    <tr
+                      key={c.sf_ref_no}
+                      className={`border-b border-slate-800/30 last:border-0 ${idx % 2 === 0 ? 'bg-transparent' : 'bg-slate-900/20'} ${isZero ? 'opacity-40' : ''}`}
+                    >
+                      <td className="px-4 py-2.5 whitespace-nowrap">
+                        <span className="font-bold text-[10px] tracking-wide" style={{ color: clr }}>
+                          {provName.toUpperCase()}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5 max-w-xs">
+                        <a
+                          href={SF_URL(c.sf_ref_no)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-slate-300 hover:text-orange-400 transition-colors leading-snug"
+                        >
+                          {c.title} ↗
+                        </a>
+                      </td>
+                      <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                        {isZero ? (
+                          <span className="text-slate-600">NOT VERIFIED</span>
+                        ) : (
+                          <a
+                            href={SCHED_URL(c.sf_ref_no)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="font-bold text-orange-400 hover:text-orange-300 transition-colors"
+                          >
+                            {runs} ↗
+                          </a>
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5 text-right text-slate-500 whitespace-nowrap">
+                        {att > 0 ? (att >= 1000 ? `${(att / 1000).toFixed(1)}K` : att) : '—'}
+                      </td>
+                      <td className="px-4 py-2.5 whitespace-nowrap">
+                        <a
+                          href={SF_URL(c.sf_ref_no)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-slate-600 hover:text-slate-400 transition-colors text-[10px]"
+                        >
+                          {c.sf_ref_no}
+                        </a>
+                      </td>
+                      <td className="px-4 py-2.5 whitespace-nowrap">
+                        <a
+                          href={SCHED_URL(c.sf_ref_no)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-sky-700 hover:text-sky-500 transition-colors text-[10px]"
+                        >
+                          Schedule ↗
+                        </a>
+                      </td>
+                      <td className="px-4 py-2.5 text-slate-600 whitespace-nowrap text-[10px]">
+                        {fmtScraped(c.scraped_at)}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </details>
+
         {/* ══ FOOTER ══ */}
         <footer className="text-[10px] font-mono text-slate-700 space-y-0.5 pb-4">
-          <p>SOURCE: MySkillsFuture Schedule tab · upcoming_run_count = &quot;Showing 1–X of <strong className="text-slate-600">N course runs</strong>&quot; scraped via browser navigation (Schedule data is AEM-rendered, requires authenticated session)</p>
-          <p>HUSTLE SG = HUSTLE INSTITUTE PTE. LTD. + HUSTLE ACADEMY PTE. LTD. · {totalCourses} courses indexed · attendee counts from Course_Quality_NumberOfRespondents (verified)</p>
+          <p>
+            SOURCE: MySF API (upcoming_run_count) · Schedule tab shows &quot;Showing 1–X of <strong className="text-slate-600">N course runs</strong>&quot; ·
+            API may include unpublished provider-planned run slots · Click ↗ links to verify live counts
+          </p>
+          <p>
+            HUSTLE SG = HUSTLE INSTITUTE PTE. LTD. + HUSTLE ACADEMY PTE. LTD. ·{' '}
+            {totalCourses} courses indexed · Attended = Course_Quality_NumberOfRespondents ·
+            Run Count = 0 courses hidden from leaderboard (shown greyed in debug table)
+          </p>
         </footer>
 
       </div>
