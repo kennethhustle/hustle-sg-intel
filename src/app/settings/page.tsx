@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { formatRelativeTime, getPlatformLabel, cn } from '@/lib/utils'
 import { Clock, Database, Globe, User, Shield } from 'lucide-react'
 import type { Platform } from '@/lib/types'
+import { ChangePasswordForm } from './change-password-form'
 
 export const revalidate = 60
 
@@ -238,6 +239,9 @@ export default async function SettingsPage() {
             To modify competitors or social handles, update the database directly via Supabase dashboard.
           </p>
         </section>
+
+        {/* Change Password */}
+        <ChangePasswordForm />
 
         {/* Security */}
         <section className="bg-slate-900/60 border border-slate-800 rounded-xl p-5">
