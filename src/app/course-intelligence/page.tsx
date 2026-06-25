@@ -117,6 +117,16 @@ async function getData() {
     courses[0].scraped_at,
   )
 
+  // Run-count freshness: provider_top_runs.scraped_at is written when the run-count
+  // scrape completes, so it reflects when upcoming_run_count was actually captured
+  // (sf_courses.scraped_at is the catalog refresh, not the run-count capture time).
+  const { data: ptr } = await supabase
+    .from('provider_top_runs')
+    .select('scraped_at')
+    .order('scraped_at', { ascending: false })
+    .limit(1)
+  const runCountCapturedAt = ptr?.[0]?.scraped_at ?? lastScraped
+
   // ── Group by normalised provider ──
   const pMap = new Map<string, Course[]>()
   for (const c of courses) {
@@ -158,6 +168,7 @@ async function getData() {
     maxRuns,
     hasRunData,
     lastScraped,
+    runCountCapturedAt,
     totalCourses: courses.length,
     totalEntities: activeRows.length,
     debugCourses,
@@ -186,12 +197,12 @@ export default async function CourseIntelligencePage() {
     )
   }
 
-  const { rows, maxRuns, hasRunData, lastScraped, totalCourses, totalEntities, debugCourses } = d
-  const { date, time } = fmtDT(lastScraped)
+  const { rows, maxRuns, hasRunData, runCountCapturedAt, totalCourses, totalEntities, debugCourses } = d
+  const { date, time } = fmtDT(runCountCapturedAt)
   const podium = rows.slice(0, 3)
 
   return (
-    <AppLayout title="MySkillsFuture Intelligence" lastUpdated={lastScraped}>
+    <AppLayout title="MySkillsFuture Intelligence" lastUpdated={runCountCapturedAt}>
       <div className="space-y-6">
 
         {/* ══ STATUS ROW ══ */}

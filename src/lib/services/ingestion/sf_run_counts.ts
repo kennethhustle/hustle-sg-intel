@@ -13,6 +13,7 @@
  * Uses @sparticuz/chromium + puppeteer-core for Vercel compatibility.
  */
 
+import fs from 'node:fs'
 import chromium from '@sparticuz/chromium'
 import puppeteer from 'puppeteer-core'
 import { createServiceClient } from '@/lib/supabase/server'
@@ -40,6 +41,146 @@ export interface RunCountSummary {
 /** Build the MySkillsFuture course Schedule tab URL from a ref number */
 function buildCourseUrl(sfRefNo: string): string {
   return `https://www.myskillsfuture.gov.sg/content/portal/en/training-exchange/course-directory/course-detail.html?courseReferenceNumber=${sfRefNo}#schedule`
+}
+
+/**
+ * Provider-name normalization mirroring the dashboard grouping in
+ * course-intelligence/page.tsx (grp()). Keeps run-count selection aligned with
+ * the leaderboard so we scrape exactly the course each provider's value comes from.
+ */
+const PROVIDER_GROUP: Record<string, string> = {
+  'BELLS INSTITUTE OF HIGHER LEARNING PTE. LTD.': 'BELLS Institute',
+  'VERTICAL INSTITUTE PTE. LTD.':                 'Vertical Institute',
+  'OOM PTE. LTD.':                                'OOm Pte Ltd',
+  'SKILLS DEVELOPMENT ACADEMY PTE. LTD.':         'Skills Dev Academy',
+  'INFO-TECH SYSTEMS LTD.':                       'InfoTech Academy',
+  '@ASK TRAINING PTE. LTD.':                      'ASK Training',
+  'HEICODERS ACADEMY PRIVATE LIMITED':            'Heicoders Academy',
+  'HAPPY TOGETHER PTE. LTD.':                     'Happy Together',
+  'EQUINET ACADEMY PRIVATE LIMITED':              'Equinet Academy',
+  'HUSTLE INSTITUTE PTE. LTD.':                   'Hustle SG',
+  'HUSTLE ACADEMY PTE. LTD.':                     'Hustle SG',
+}
+function normalizeProvider(raw: string): string {
+  if ((raw ?? '').toUpperCase().includes('HUSTLE')) return 'Hustle SG'
+  return PROVIDER_GROUP[raw] ?? raw
+}
+
+interface SelectedCourse {
+  sf_ref_no: string
+  course_url: string
+  provider: string      // normalized (display) provider name
+  raw_provider: string  // original sf_courses.provider_name
+  title: string
+  old_count: number     // current sf_courses.upcoming_run_count before re-scrape
+}
+
+/**
+ * Primary selection: the single course that currently produces each provider's
+ * leaderboard value — the highest upcoming_run_count course per normalized provider.
+ * Mirrors the dashboard ranking and yields ~10 courses (one per displayed provider).
+ * Returns [] when no provider has any run data yet (caller falls back).
+ */
+async function selectLeaderCourses(
+  supabase: Awaited<ReturnType<typeof createServiceClient>>
+): Promise<SelectedCourse[]> {
+  const { data, error } = await supabase
+    .from('sf_courses')
+    .select('sf_ref_no, provider_name, title, upcoming_run_count')
+    .order('upcoming_run_count', { ascending: false })
+
+  if (error || !data) {
+    throw new Error(`Failed to fetch courses for leader selection: ${error?.message}`)
+  }
+
+  // data is sorted desc, so the first row seen per provider is its current leader.
+  const leaderByProvider = new Map<string, SelectedCourse>()
+  for (const c of data) {
+    const provider = normalizeProvider(c.provider_name)
+    if (leaderByProvider.has(provider)) continue          // already have this provider's max
+    if ((c.upcoming_run_count ?? 0) <= 0) continue         // no real leader yet for this provider
+    leaderByProvider.set(provider, {
+      sf_ref_no: c.sf_ref_no,
+      course_url: buildCourseUrl(c.sf_ref_no),
+      provider,
+      raw_provider: c.provider_name,
+      title: c.title ?? '',
+      old_count: c.upcoming_run_count ?? 0,
+    })
+  }
+  return [...leaderByProvider.values()]
+}
+
+/**
+ * Fallback selection (only used when no provider has run data yet): the original
+ * top-N-per-provider-by-popularity behaviour.
+ */
+async function selectTopByPopularity(
+  supabase: Awaited<ReturnType<typeof createServiceClient>>
+): Promise<SelectedCourse[]> {
+  const { data, error } = await supabase
+    .from('sf_courses')
+    .select('sf_ref_no, provider_name, title, upcoming_run_count, popularity_score')
+    .order('provider_name', { ascending: true })
+    .order('popularity_score', { ascending: false })
+
+  if (error || !data) {
+    throw new Error(`Failed to fetch courses for fallback selection: ${error?.message}`)
+  }
+
+  const providerCounts = new Map<string, number>()
+  const out: SelectedCourse[] = []
+  for (const c of data) {
+    const raw = c.provider_name
+    const n = providerCounts.get(raw) ?? 0
+    if (n < COURSES_PER_PROVIDER) {
+      providerCounts.set(raw, n + 1)
+      out.push({
+        sf_ref_no: c.sf_ref_no,
+        course_url: buildCourseUrl(c.sf_ref_no),
+        provider: normalizeProvider(raw),
+        raw_provider: raw,
+        title: c.title ?? '',
+        old_count: c.upcoming_run_count ?? 0,
+      })
+    }
+  }
+  return out
+}
+
+/**
+ * Launch a headless browser.
+ * Production (Vercel/Lambda): bundled @sparticuz/chromium binary — UNCHANGED.
+ * Local dev: an installed Chrome/Edge (env override or common install paths),
+ * since the @sparticuz binary is Linux-only and cannot run on a dev machine.
+ */
+async function launchBrowser(): Promise<puppeteer.Browser> {
+  if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
+    return puppeteer.launch({
+      args: chromium.args,
+      defaultViewport: chromium.defaultViewport,
+      executablePath: await chromium.executablePath(),
+      headless: chromium.headless,
+    })
+  }
+
+  const candidates = [
+    process.env.PUPPETEER_EXECUTABLE_PATH,
+    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+    'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+    'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+  ].filter((p): p is string => !!p)
+  const executablePath = candidates.find((p) => { try { return fs.existsSync(p) } catch { return false } })
+  if (!executablePath) {
+    throw new Error('No local Chrome/Edge found. Set PUPPETEER_EXECUTABLE_PATH to run run-count scraping locally.')
+  }
+  console.log(`[runcount] local browser: ${executablePath}`)
+  return puppeteer.launch({
+    executablePath,
+    headless: true,
+    defaultViewport: { width: 1280, height: 800 },
+  })
 }
 
 /** Extract run count from page text, returns null if not found */
@@ -117,44 +258,23 @@ export async function scrapeAndUpdateRunCounts(): Promise<RunCountSummary> {
   const started_at = new Date().toISOString()
   const supabase = await createServiceClient()
 
-  // Fetch top N courses per provider that have a course URL
-  // We use a subquery approach: get all courses ordered by provider + popularity,
-  // then deduplicate to top N per provider in JS (Supabase doesn't support DISTINCT ON easily)
-  const { data: allCourses, error: fetchErr } = await supabase
-    .from('sf_courses')
-    .select('sf_ref_no, provider_name, popularity_score')
-    .order('provider_name', { ascending: true })
-    .order('popularity_score', { ascending: false })
-
-  if (fetchErr || !allCourses) {
-    throw new Error(`Failed to fetch courses: ${fetchErr?.message}`)
+  // Select the course behind each provider's current leaderboard value (~10 pages).
+  // Fall back to top-5/popularity only if no provider has any run data yet.
+  let selectedCourses = await selectLeaderCourses(supabase)
+  let selectionMode = 'leader'
+  if (selectedCourses.length === 0) {
+    console.warn('[runcount] No provider has run data yet — falling back to top-5 by popularity')
+    selectedCourses = await selectTopByPopularity(supabase)
+    selectionMode = 'fallback-top5'
   }
 
-  // Pick top N per provider
-  const providerCounts = new Map<string, number>()
-  const selectedCourses: Array<{ sf_ref_no: string; course_url: string }> = []
+  console.log(
+    `[runcount] selection=${selectionMode}; scraping ${selectedCourses.length} course(s): ` +
+    selectedCourses.map((c) => `${c.provider}:${c.sf_ref_no}(old=${c.old_count})`).join(', ')
+  )
 
-  for (const course of allCourses) {
-    const provider = course.provider_name
-    const count = providerCounts.get(provider) ?? 0
-    if (count < COURSES_PER_PROVIDER) {
-      providerCounts.set(provider, count + 1)
-      selectedCourses.push({
-        sf_ref_no: course.sf_ref_no,
-        course_url: buildCourseUrl(course.sf_ref_no),
-      })
-    }
-  }
-
-  console.log(`Scraping ${selectedCourses.length} courses across ${providerCounts.size} providers`)
-
-  // Launch headless Chrome
-  const browser = await puppeteer.launch({
-    args: chromium.args,
-    defaultViewport: chromium.defaultViewport,
-    executablePath: await chromium.executablePath(),
-    headless: chromium.headless,
-  })
+  // Launch headless Chrome (prod: @sparticuz/chromium; local: installed Chrome/Edge)
+  const browser = await launchBrowser()
 
   const allResults: RunCountResult[] = []
 
@@ -175,11 +295,20 @@ export async function scrapeAndUpdateRunCounts(): Promise<RunCountSummary> {
     await browser.close().catch(() => {})
   }
 
-  // Update sf_courses.upcoming_run_count for successful scrapes
+  // Update sf_courses.upcoming_run_count for successful scrapes, with per-course logging.
+  const selMap = new Map(selectedCourses.map((c) => [c.sf_ref_no, c]))
   let updated = 0
-  const successful = allResults.filter((r) => r.error === null)
 
-  for (const result of successful) {
+  for (const result of allResults) {
+    const sel = selMap.get(result.sf_ref_no)
+    const provider = sel?.provider ?? 'unknown'
+    const oldCount = sel?.old_count ?? 0
+
+    if (result.error !== null) {
+      console.warn(`[runcount] FAIL  provider="${provider}" ref=${result.sf_ref_no} old=${oldCount} -> ${result.error}`)
+      continue
+    }
+
     const { error: updateErr } = await supabase
       .from('sf_courses')
       .update({ upcoming_run_count: result.upcoming_run_count })
@@ -187,8 +316,10 @@ export async function scrapeAndUpdateRunCounts(): Promise<RunCountSummary> {
 
     if (!updateErr) {
       updated++
+      const delta = result.upcoming_run_count - oldCount
+      console.log(`[runcount] OK    provider="${provider}" ref=${result.sf_ref_no} old=${oldCount} new=${result.upcoming_run_count} (${delta >= 0 ? '+' : ''}${delta})`)
     } else {
-      console.error(`Failed to update ${result.sf_ref_no}:`, updateErr.message)
+      console.error(`[runcount] DBERR provider="${provider}" ref=${result.sf_ref_no}: ${updateErr.message}`)
     }
   }
 
