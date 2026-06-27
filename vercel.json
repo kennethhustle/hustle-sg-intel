@@ -21,6 +21,10 @@
       "schedule": "0 2 * * *"
     },
     {
+      "path": "/api/cron/seo-insights",
+      "schedule": "30 2 * * *"
+    },
+    {
       "path": "/api/cron/runcount-refresh",
       "schedule": "0 23 * * *"
     }

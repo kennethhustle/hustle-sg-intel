@@ -12,6 +12,7 @@
 
 import type { ReactNode } from 'react'
 import { AppLayout } from '@/components/layout/app-layout'
+import { InsightEngineClient } from '@/components/insights/insight-engine-client'
 
 export const revalidate = 3600
 
@@ -750,6 +751,17 @@ export default function SearchIntelligencePage() {
           <span>Organic positions only — paid ads noted separately</span>
           <span>·</span>
           <span>Click any keyword to open the source Google Search</span>
+        </div>
+
+        {/* ── AI SEO Insights (appended below the dashboard — does not modify any section above) ── */}
+        <div className="pt-6 border-t border-slate-800/60">
+          <div className="mb-4">
+            <h2 className="text-xl font-black tracking-tight text-white">AI SEO Insights</h2>
+            <p className="text-xs text-slate-500 mt-0.5">
+              AI-generated from internal data only — courses, MySkillsFuture demand, hiring and audience reach
+            </p>
+          </div>
+          <InsightEngineClient module="seo" />
         </div>
 
       </div>

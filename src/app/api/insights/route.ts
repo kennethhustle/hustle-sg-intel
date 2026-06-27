@@ -1,7 +1,19 @@
 import { createClient, createServiceClient } from '@/lib/supabase/server'
 import { NextRequest, NextResponse } from 'next/server'
-import { generateStrategicInsights, stampInsightsWithSession } from '@/lib/services/ai/claude'
+import { generateStrategicInsights, generateSeoInsights, stampInsightsWithSession } from '@/lib/services/ai/claude'
+import { gatherSeoIntelligence } from '@/lib/services/ai/seo-data'
 import type { SocialRankingEntry, Competitor, Platform, SocialMetric } from '@/lib/types'
+
+// Restrict any query to a single intelligence surface so Opportunity Engine
+// (strategic) and Search Intelligence (seo) never read each other's insights.
+// SEO rows are tagged metadata.module = 'seo'; everything else (incl. legacy
+// rows with no metadata) is treated as strategic.
+type ModuleQuery = { or: (f: string) => unknown; filter: (c: string, o: string, v: string) => unknown }
+function scopeByModule<T extends ModuleQuery>(query: T, isSeo: boolean): T {
+  return (isSeo
+    ? query.filter('metadata->>module', 'eq', 'seo')
+    : query.or('metadata->>module.is.null,metadata->>module.neq.seo')) as T
+}
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient()
@@ -9,14 +21,18 @@ export async function GET(request: NextRequest) {
   const insightType = searchParams.get('type')
   const scope = searchParams.get('scope')
   const sessionId = searchParams.get('session')
+  const isSeo = searchParams.get('module') === 'seo'
   const limit = parseInt(searchParams.get('limit') ?? '20', 10)
 
   // History: insights for one specific Generation Session (ignores expiry).
   if (sessionId) {
-    let q = supabase
-      .from('strategic_insights')
-      .select('*')
-      .order('created_at', { ascending: false })
+    let q = scopeByModule(
+      supabase
+        .from('strategic_insights')
+        .select('*')
+        .order('created_at', { ascending: false }),
+      isSeo
+    )
 
     if (sessionId.startsWith('legacy:')) {
       // Pre-feature rows have no stamped session_id; the history bucket key is a
@@ -42,20 +58,24 @@ export async function GET(request: NextRequest) {
   // recent run is always shown). Falls back to legacy behaviour if no run has
   // session metadata yet.
   if (scope === 'latest') {
-    const { data: newest, error: newestErr } = await supabase
-      .from('strategic_insights')
-      .select('metadata, created_at')
-      .order('created_at', { ascending: false })
-      .limit(1)
+    const { data: newest, error: newestErr } = await scopeByModule(
+      supabase
+        .from('strategic_insights')
+        .select('metadata, created_at')
+        .order('created_at', { ascending: false }),
+      isSeo
+    ).limit(1)
     if (newestErr) return NextResponse.json({ error: newestErr.message }, { status: 500 })
 
     const latestSession = (newest?.[0]?.metadata as { session_id?: string } | null | undefined)?.session_id
     if (latestSession) {
-      let q = supabase
-        .from('strategic_insights')
-        .select('*')
-        .filter('metadata->>session_id', 'eq', latestSession)
-        .order('created_at', { ascending: false })
+      let q = scopeByModule(
+        supabase
+          .from('strategic_insights')
+          .select('*')
+          .order('created_at', { ascending: false }),
+        isSeo
+      ).filter('metadata->>session_id', 'eq', latestSession)
       if (insightType) q = q.eq('insight_type', insightType)
       const { data, error } = await q
       if (error) return NextResponse.json({ error: error.message }, { status: 500 })
@@ -64,11 +84,13 @@ export async function GET(request: NextRequest) {
     // Fall through to default behaviour for legacy rows without session metadata.
   }
 
-  let query = supabase
-    .from('strategic_insights')
-    .select('*')
-    .order('created_at', { ascending: false })
-    .limit(limit)
+  let query = scopeByModule(
+    supabase
+      .from('strategic_insights')
+      .select('*')
+      .order('created_at', { ascending: false }),
+    isSeo
+  ).limit(limit)
 
   if (insightType) {
     query = query.eq('insight_type', insightType)
@@ -108,8 +130,37 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 })
   }
 
+  const isSeo = new URL(request.url).searchParams.get('module') === 'seo'
   const serviceSupabase = await createServiceClient()
   const startTime = Date.now()
+
+  // ── Search Intelligence (SEO) generation ──
+  // Reuses the same Gemini service + strategic_insights table + session
+  // mechanism; only the data gatherer and module tag differ.
+  if (isSeo) {
+    try {
+      const seoPayload = await gatherSeoIntelligence(serviceSupabase)
+      const seoInsights = await generateSeoInsights(seoPayload)
+      const { sessionId, insights: stampedSeo } = stampInsightsWithSession(seoInsights, {
+        source: 'manual',
+        durationMs: Date.now() - startTime,
+        module: 'seo',
+      })
+      const { data: inserted, error: insertError } = await serviceSupabase
+        .from('strategic_insights')
+        .insert(stampedSeo)
+        .select()
+      if (insertError) {
+        return NextResponse.json({ error: insertError.message }, { status: 500 })
+      }
+      return NextResponse.json({ data: inserted, count: inserted?.length ?? 0, session_id: sessionId })
+    } catch (err) {
+      return NextResponse.json(
+        { error: err instanceof Error ? err.message : String(err) },
+        { status: 500 }
+      )
+    }
+  }
 
   try {
     // Gather intelligence data
@@ -202,6 +253,7 @@ export async function POST(request: NextRequest) {
     const { sessionId, insights: stampedInsights } = stampInsightsWithSession(insights, {
       source: 'manual',
       durationMs: generationMs,
+      module: 'strategic',
     })
 
     // Insert insights into DB

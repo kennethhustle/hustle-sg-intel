@@ -13,12 +13,21 @@ export async function GET(request: NextRequest) {
   const supabase = await createClient()
   const { searchParams } = new URL(request.url)
   const limit = parseInt(searchParams.get('limit') ?? '2000', 10)
+  const isSeo = searchParams.get('module') === 'seo'
 
-  const { data: rows, error } = await supabase
+  let rowsQuery = supabase
     .from('strategic_insights')
     .select('insight_type, model_version, generated_by, created_at, metadata')
     .order('created_at', { ascending: false })
     .limit(limit)
+
+  // Keep SEO and strategic generation histories isolated. SEO rows are tagged
+  // metadata.module = 'seo'; everything else (incl. legacy rows) is strategic.
+  rowsQuery = isSeo
+    ? rowsQuery.filter('metadata->>module', 'eq', 'seo')
+    : rowsQuery.or('metadata->>module.is.null,metadata->>module.neq.seo')
+
+  const { data: rows, error } = await rowsQuery
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 })

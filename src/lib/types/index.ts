@@ -11,6 +11,23 @@ export type InsightType =
   | 'social_insight'
   | 'hiring_intel'
   | 'course_intel'
+// SEO / Search Intelligence presentation categories. These live ONLY in
+// metadata.seo_category and as UI labels — they are NEVER database insight_type
+// values (the strategic_insights CHECK constraint would reject them). Each maps
+// to an allowed InsightType in the Gemini service (SEO_CATEGORY_TO_TYPE).
+export type SeoCategory =
+  | 'keyword_opportunity'
+  | 'seo_threat'
+  | 'content_opportunity'
+  | 'competitor_search_position'
+  | 'recommended_landing_page'
+  | 'high_demand_topic'
+  | 'missing_content_category'
+  | 'search_growth'
+// Which intelligence surface a generation belongs to. Stored in metadata so
+// Opportunity Engine (strategic) and Search Intelligence (seo) insights share
+// the same strategic_insights table without colliding. Absent = strategic.
+export type InsightModule = 'strategic' | 'seo'
 export type UserRole = 'admin' | 'analyst' | 'viewer'
 
 export interface Competitor {
@@ -105,6 +122,12 @@ export interface InsightMetadata {
   generated_at: string
   model: string | null
   insight_count: number
+  // Present on every session-stamped row going forward. Absent = strategic
+  // (legacy rows). Used to keep SEO and strategic insights isolated.
+  module?: InsightModule
+  // Present only on SEO-module insights — the fine-grained presentation
+  // category. The DB insight_type stays one of the allowed base values.
+  seo_category?: SeoCategory
 }
 
 export interface StrategicInsight {
