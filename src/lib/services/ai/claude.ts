@@ -1,7 +1,21 @@
-import Anthropic from '@anthropic-ai/sdk'
+import { GoogleGenAI } from '@google/genai'
 import type { StrategicInsight, SocialRankingEntry, JobPosting } from '@/lib/types'
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY! })
+const GEMINI_MODEL = 'gemini-2.5-flash'
+
+/**
+ * Lazily construct the Gemini client so a missing key never crashes module
+ * import (GET/list routes keep working). A clear error is thrown only when an
+ * AI generation is actually attempted without a configured key, and it surfaces
+ * through the existing cron/POST error JSON and the Regenerate error UI.
+ */
+function getClient(): GoogleGenAI {
+  const apiKey = process.env.GEMINI_API_KEY
+  if (!apiKey) {
+    throw new Error('AI provider not configured (GEMINI_API_KEY missing)')
+  }
+  return new GoogleGenAI({ apiKey })
+}
 
 interface IntelligencePayload {
   socialRanking: SocialRankingEntry[]
@@ -53,7 +67,7 @@ Return a JSON array of insight objects with these fields:
 - body: string (200-400 words, specific, actionable, data-driven — reference actual numbers from the data provided)
 - severity: 'low'|'medium'|'high'|'critical'
 - competitor_ids: array of competitor names mentioned (or null)
-- model_version: 'claude-3-5-sonnet-20241022'
+- model_version: 'gemini-2.5-flash'
 
 Rules:
 - Only reference numbers that were actually provided in the data above
@@ -63,14 +77,13 @@ Rules:
 
 Only output the JSON array, no other text, no markdown fences.`
 
-  const response = await client.messages.create({
-    model: 'claude-3-5-sonnet-20241022',
-    max_tokens: 4096,
-    messages: [{ role: 'user', content: prompt }],
+  const response = await getClient().models.generateContent({
+    model: GEMINI_MODEL,
+    contents: prompt,
+    config: { responseMimeType: 'application/json' },
   })
 
-  const text =
-    response.content[0].type === 'text' ? response.content[0].text : '[]'
+  const text = response.text ?? '[]'
 
   let parsed: InsightDraft[]
   try {
@@ -78,18 +91,20 @@ Only output the JSON array, no other text, no markdown fences.`
     const cleaned = text.replace(/^```(?:json)?\n?/m, '').replace(/\n?```$/m, '').trim()
     parsed = JSON.parse(cleaned)
   } catch {
-    throw new Error(`Failed to parse Claude response as JSON: ${text.substring(0, 200)}`)
+    throw new Error(`Failed to parse Gemini response as JSON: ${text.substring(0, 200)}`)
   }
 
   if (!Array.isArray(parsed)) {
-    throw new Error('Claude returned non-array response')
+    throw new Error('Gemini returned non-array response')
   }
 
   const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
 
   return parsed.map((insight) => ({
     ...insight,
-    generated_by: 'claude',
+    competitor_ids: null, // schema column is uuid[]; model emits names — store null until UUID mapping exists
+    generated_by: 'gemini',
+    model_version: GEMINI_MODEL,
     expires_at: expiresAt,
   }))
 }
@@ -97,20 +112,14 @@ Only output the JSON array, no other text, no markdown fences.`
 export async function generateAlertSummary(alerts: string[]): Promise<string> {
   if (alerts.length === 0) return 'No recent alerts to summarize.'
 
-  const response = await client.messages.create({
-    model: 'claude-3-5-sonnet-20241022',
-    max_tokens: 500,
-    messages: [
-      {
-        role: 'user',
-        content: `Summarize these competitive intelligence alerts for Hustle SG in 2-3 sentences. Focus on the most actionable items:
+  const response = await getClient().models.generateContent({
+    model: GEMINI_MODEL,
+    contents: `Summarize these competitive intelligence alerts for Hustle SG in 2-3 sentences. Focus on the most actionable items:
 
 ${alerts.join('\n')}
 
 Only output the summary text, no other content.`,
-      },
-    ],
   })
 
-  return response.content[0].type === 'text' ? response.content[0].text : ''
+  return response.text ?? ''
 }

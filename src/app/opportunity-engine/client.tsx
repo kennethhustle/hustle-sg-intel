@@ -106,7 +106,7 @@ export function OpportunityEngineClient() {
             AI-generated strategic insights based on live competitive data. Updated daily via cron at 10am SGT.
           </p>
           <p className="text-xs text-slate-600 mt-1">
-            Powered by Claude 3.5 Sonnet &middot; Only references verified live data
+            Powered by Google Gemini 2.5 Flash &middot; Only references verified live data
           </p>
         </div>
         <button
@@ -216,7 +216,7 @@ export function OpportunityEngineClient() {
                 <div className="flex items-center gap-1.5">
                   <Zap className="h-3 w-3 text-indigo-400" />
                   <span className="text-[10px] text-slate-600">
-                    {insight.model_version ?? 'claude'}
+                    {insight.model_version ?? 'gemini'}
                   </span>
                 </div>
                 {insight.expires_at && (

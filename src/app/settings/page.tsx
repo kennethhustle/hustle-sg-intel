@@ -10,7 +10,7 @@ const CRON_SCHEDULE = [
   { name: 'Social Refresh', path: '/api/cron/social-refresh', schedule: '0 23 * * *', time: '7:00am SGT', description: 'Scrapes social follower counts for all competitors' },
   { name: 'Hiring Refresh', path: '/api/cron/hiring-refresh', schedule: '0 0 * * *', time: '8:00am SGT', description: 'Scrapes job postings from MCF, JobStreet, Indeed, career pages' },
   { name: 'Courses Refresh', path: '/api/cron/courses-refresh', schedule: '0 1 * * *', time: '9:00am SGT', description: 'Scrapes SkillsFuture API and company course pages' },
-  { name: 'AI Insights', path: '/api/cron/ai-insights', schedule: '0 2 * * *', time: '10:00am SGT', description: 'Generates strategic insights using Claude AI' },
+  { name: 'AI Insights', path: '/api/cron/ai-insights', schedule: '0 2 * * *', time: '10:00am SGT', description: 'Generates strategic insights using Google Gemini' },
 ]
 
 const PLATFORMS: Platform[] = ['instagram', 'facebook', 'linkedin', 'tiktok', 'youtube']
@@ -286,7 +286,7 @@ export default async function SettingsPage() {
             </li>
             <li className="flex items-start gap-2">
               <span className="text-emerald-400 shrink-0 mt-0.5">✓</span>
-              AI insights are generated only from verified data — the prompt instructs Claude not to speculate on unavailable metrics
+              AI insights are generated only from verified data — the prompt instructs Gemini not to speculate on unavailable metrics
             </li>
           </ul>
         </section>
