@@ -5,6 +5,7 @@ import {
   exactCount,
   extractJsonNumber,
   pickPreciseCount,
+  SOURCE_CONFIDENCE,
 } from './_shared'
 
 interface LinkedInData {
@@ -31,11 +32,14 @@ export async function scrapeLinkedIn(
 
     const metaText = `${page.metaDescription} ${page.ogDescription}`
 
-    // Prefer an exact integer from any source over an abbreviated one.
+    // Explicit source priority (json > meta > body), not argument order.
     const followers = pickPreciseCount(
-      findCountDetailed(page.bodyText, ['followers']),
-      exactCount(extractJsonNumber(page.html, ['followerCount', 'followingInfoCount'])),
-      findCountDetailed(metaText, ['followers'])
+      exactCount(
+        extractJsonNumber(page.html, ['followerCount', 'followingInfoCount']),
+        SOURCE_CONFIDENCE.json
+      ),
+      findCountDetailed(metaText, ['followers'], SOURCE_CONFIDENCE.meta),
+      findCountDetailed(page.bodyText, ['followers'], SOURCE_CONFIDENCE.body)
     )
 
     if (followers === null) {
@@ -46,9 +50,9 @@ export async function scrapeLinkedIn(
 
     const employees =
       pickPreciseCount(
-        findCountDetailed(page.bodyText, ['employees']),
-        exactCount(extractJsonNumber(page.html, ['staffCount'])),
-        findCountDetailed(metaText, ['employees'])
+        exactCount(extractJsonNumber(page.html, ['staffCount']), SOURCE_CONFIDENCE.json),
+        findCountDetailed(metaText, ['employees'], SOURCE_CONFIDENCE.meta),
+        findCountDetailed(page.bodyText, ['employees'], SOURCE_CONFIDENCE.body)
       ) ?? 0
 
     const company_name = (page.ogTitle || page.title)

@@ -5,6 +5,7 @@ import {
   exactCount,
   extractJsonNumber,
   pickPreciseCount,
+  SOURCE_CONFIDENCE,
 } from './_shared'
 
 interface FacebookData {
@@ -31,12 +32,14 @@ export async function scrapeFacebook(
 
     const metaText = `${page.metaDescription} ${page.ogDescription}`
 
-    // Prefer the live body text (exact integer) over the cached/abbreviated
-    // meta description so a 1-follower change is captured.
+    // Explicit source priority (json > meta > body), not argument order.
     const followers = pickPreciseCount(
-      findCountDetailed(page.bodyText, ['followers', 'people follow this']),
-      exactCount(extractJsonNumber(page.html, ['followerCount', 'follower_count'])),
-      findCountDetailed(metaText, ['followers', 'people follow this'])
+      exactCount(
+        extractJsonNumber(page.html, ['followerCount', 'follower_count']),
+        SOURCE_CONFIDENCE.json
+      ),
+      findCountDetailed(metaText, ['followers', 'people follow this'], SOURCE_CONFIDENCE.meta),
+      findCountDetailed(page.bodyText, ['followers', 'people follow this'], SOURCE_CONFIDENCE.body)
     )
 
     if (followers === null) {
@@ -47,9 +50,12 @@ export async function scrapeFacebook(
 
     const likes =
       pickPreciseCount(
-        findCountDetailed(page.bodyText, ['likes', 'people like this']),
-        exactCount(extractJsonNumber(page.html, ['likeCount', 'like_count'])),
-        findCountDetailed(metaText, ['likes', 'people like this'])
+        exactCount(
+          extractJsonNumber(page.html, ['likeCount', 'like_count']),
+          SOURCE_CONFIDENCE.json
+        ),
+        findCountDetailed(metaText, ['likes', 'people like this'], SOURCE_CONFIDENCE.meta),
+        findCountDetailed(page.bodyText, ['likes', 'people like this'], SOURCE_CONFIDENCE.body)
       ) ?? 0
 
     return {

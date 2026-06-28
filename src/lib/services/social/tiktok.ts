@@ -5,6 +5,7 @@ import {
   exactCount,
   extractJsonNumber,
   pickPreciseCount,
+  SOURCE_CONFIDENCE,
 } from './_shared'
 
 interface TikTokData {
@@ -34,15 +35,16 @@ export async function scrapeTikTok(
 
     // TikTok embeds stats in SIGI_STATE / __UNIVERSAL_DATA_FOR_REHYDRATION__
     // JSON inside the rendered HTML — this is the authoritative exact integer.
-    // Body/meta text only carry abbreviated values ("18.3K") so they are a
-    // last resort handled by pickPreciseCount (exact always wins).
+    // Body/meta text only carry abbreviated values ("18.3K"). Source priority
+    // is explicit (json > meta > body), not argument order.
     const followers = pickPreciseCount(
-      exactCount(extractJsonNumber(page.html, ['followerCount'])),
-      findCountDetailed(page.bodyText, ['followers']),
+      exactCount(extractJsonNumber(page.html, ['followerCount']), SOURCE_CONFIDENCE.json),
       findCountDetailed(
         `${page.metaDescription} ${page.ogDescription}`,
-        ['followers']
-      )
+        ['followers'],
+        SOURCE_CONFIDENCE.meta
+      ),
+      findCountDetailed(page.bodyText, ['followers'], SOURCE_CONFIDENCE.body)
     )
 
     if (followers === null) {

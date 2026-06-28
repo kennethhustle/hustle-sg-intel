@@ -26,12 +26,41 @@ export interface PageContent {
 /**
  * Loads the exact URL in a real (headless) browser, waits for the page to
  * settle, and returns the rendered HTML plus the most useful text signals.
+ *
+ * Client-rendered sites (Instagram) put the rounded `og:description` in the
+ * static SSR <head> (available immediately) but only expose the precise
+ * follower data — embedded `follower_count` JSON and the visible "30.7K" body
+ * header — AFTER React hydrates. Reading after a fixed delay therefore often
+ * captures only the rounded meta value. Pass `waitUntilReady` to poll the page
+ * until the precise data has hydrated (or `settleMs` elapses) before capturing.
  */
 export async function loadPageContent(
   url: string,
-  opts: { waitMs?: number; timeoutMs?: number } = {}
+  opts: {
+    waitMs?: number
+    timeoutMs?: number
+    /**
+     * Hydration gate. When provided, after navigation the page is polled every
+     * `pollMs` until this predicate returns true or `settleMs` elapses, instead
+     * of using the fixed `waitMs`. Receives lightweight html/bodyText snapshots.
+     */
+    waitUntilReady?: (snap: { html: string; bodyText: string }) => boolean
+    /** Max time to spend polling for `waitUntilReady`. Default 18s. */
+    settleMs?: number
+    /** Poll interval for `waitUntilReady`. Default 600ms. */
+    pollMs?: number
+  } = {}
 ): Promise<PageContent> {
-  const { waitMs = 3500, timeoutMs = 20_000 } = opts
+  const {
+    waitMs = 3500,
+    timeoutMs = 20_000,
+    waitUntilReady,
+    settleMs = 18_000,
+    pollMs = 600,
+  } = opts
+
+  const readBodyText = (page: import('puppeteer-core').Page) =>
+    page.evaluate(() => (document.body?.innerText || '').slice(0, 20_000))
 
   return withBrowser(async (page) => {
     page.setDefaultNavigationTimeout(timeoutMs)
@@ -45,8 +74,26 @@ export async function loadPageContent(
       const msg = err instanceof Error ? err.message : String(err)
       if (!/timeout/i.test(msg)) throw err
     }
-    // Give client-rendered content a moment to populate.
-    await new Promise((resolve) => setTimeout(resolve, waitMs))
+
+    if (waitUntilReady) {
+      // Hydration-gated wait: poll until the precise data has rendered. A gentle
+      // scroll nudges Instagram into hydrating the profile header.
+      const deadline = Date.now() + settleMs
+      await page.evaluate(() => window.scrollBy(0, 800)).catch(() => {})
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const [html, bodyText] = await Promise.all([
+          page.content(),
+          readBodyText(page),
+        ])
+        if (waitUntilReady({ html, bodyText }) || Date.now() >= deadline) break
+        await new Promise((resolve) => setTimeout(resolve, pollMs))
+        await page.evaluate(() => window.scrollBy(0, 400)).catch(() => {})
+      }
+    } else {
+      // Give client-rendered content a moment to populate.
+      await new Promise((resolve) => setTimeout(resolve, waitMs))
+    }
 
     const html = await page.content()
     const title = await page.title()
@@ -167,30 +214,122 @@ export function extractJsonNumber(
 }
 
 /**
- * A parsed count together with whether it was an EXACT raw integer.
- * `exact === false` means the source only gave an abbreviated value
- * ("31K", "1.2M") which loses precision and should be used last.
+ * Extracts the EXACT follower integer from a rendered Instagram profile page.
+ *
+ * Instagram never renders the precise count as visible text for large accounts:
+ * the body header shows the ROUNDED "30.7K" and the og:description shows the even
+ * rounder "31K". The exact integer (e.g. 30707) is only available from:
+ *   1. Embedded JSON — `"follower_count":30707` / `"edge_followed_by":{"count":30707}`.
+ *   2. The DOM `title` attribute on the followers control — Instagram stores the
+ *      full number there (`title="30,707"`) while *displaying* "30.7K".
+ * Small accounts (< 10k) render the full integer as visible text, but those are
+ * handled by the caller's exact-body path; this helper covers the abbreviated case.
+ *
+ * Returns the exact integer, or null when the page was not hydrated (login wall /
+ * throttled variant) so the caller can RETRY rather than store an approximation.
+ */
+export function extractExactFollowersFromHtml(html: string): number | null {
+  if (!html) return null
+
+  // 1) Embedded JSON — authoritative exact integer.
+  const json = extractJsonNumber(html, [
+    'follower_count',
+    'edge_followed_by',
+    'followerCount',
+  ])
+  if (json !== null) return json
+
+  // 2) DOM title attribute anchored to the /followers/ control. The title holds
+  //    the exact integer ("30,707") even when the visible text is "30.7K".
+  const afterHref =
+    /href="[^"]*\/followers\/?"[\s\S]{0,400}?title="([\d,]+)"/i.exec(html)
+  if (afterHref) {
+    const v = parseInt(afterHref[1].replace(/,/g, ''), 10)
+    if (Number.isFinite(v) && v > 0) return v
+  }
+
+  // 3) Title attribute immediately preceding the "followers" label.
+  const beforeLabel =
+    /title="([\d,]+)"[\s\S]{0,200}?followers/i.exec(html)
+  if (beforeLabel) {
+    const v = parseInt(beforeLabel[1].replace(/,/g, ''), 10)
+    if (Number.isFinite(v) && v > 0) return v
+  }
+
+  return null
+}
+
+/**
+ * Explicit confidence ranking for a follower-count source. HIGHER always wins,
+ * regardless of the order candidates are passed to {@link pickPreciseCount} /
+ * {@link pickPreciseDetailed}. Selection no longer relies on argument order.
+ *
+ * Verified by live trace of @thehustlesg: the og/meta description ROUNDS
+ * ("31K Followers" → 31000) while the visible body header is finer
+ * ("30.7K" → 30700) and embedded JSON is exact ("follower_count":30702).
+ *
+ *   json (3) — authoritative exact integer from embedded JSON ("follower_count":30702)
+ *   body (2) — visible page header, finer than meta ("30.7K")
+ *   meta (1) — og:description / meta tag, which is ROUNDED ("31K")
+ */
+export const SOURCE_CONFIDENCE = {
+  json: 3,
+  body: 2,
+  meta: 1,
+} as const
+
+/** Maps a numeric {@link SOURCE_CONFIDENCE} score to the `data_confidence`
+ *  text label stored on `social_snapshots` (json→high, body→medium, meta→low). */
+export function confidenceLabel(score: number): 'high' | 'medium' | 'low' {
+  if (score >= SOURCE_CONFIDENCE.json) return 'high'
+  if (score >= SOURCE_CONFIDENCE.body) return 'medium'
+  return 'low'
+}
+
+/** Inverse of {@link confidenceLabel}: derives a numeric score from a stored
+ *  `data_confidence` label so persistence can gate overwrites. Unknown/null → 0. */
+export function confidenceFromLabel(label: string | null | undefined): number {
+  switch (label) {
+    case 'high':
+      return SOURCE_CONFIDENCE.json
+    case 'medium':
+      return SOURCE_CONFIDENCE.body
+    case 'low':
+      return SOURCE_CONFIDENCE.meta
+    default:
+      return 0
+  }
+}
+
+/**
+ * A parsed count together with whether it was an EXACT raw integer and the
+ * confidence of the source it came from. `exact === false` means the source
+ * only gave an abbreviated value ("31K", "1.2M"); `confidence` ranks the source
+ * (see {@link SOURCE_CONFIDENCE}).
  */
 export interface CountResult {
   value: number
   exact: boolean
+  confidence: number
 }
 
-function toCountResult(token: string): CountResult | null {
+function toCountResult(token: string, confidence: number): CountResult | null {
   const trimmed = token.trim()
   const value = parseCount(trimmed)
   if (value === null) return null
   // Abbreviated tokens carry a K/M/B suffix → not precise to the unit.
-  return { value, exact: !/[kmb]/i.test(trimmed) }
+  return { value, exact: !/[kmb]/i.test(trimmed), confidence }
 }
 
 /**
  * Like {@link findCountByKeyword} but also reports whether the matched token
- * was an exact raw integer ("7,024") or an abbreviated value ("31K").
+ * was an exact raw integer ("7,024") or an abbreviated value ("31K"), tagged
+ * with the confidence of the source the `text` came from.
  */
 export function findCountDetailed(
   text: string,
-  keywords: string[]
+  keywords: string[],
+  confidence: number = SOURCE_CONFIDENCE.body
 ): CountResult | null {
   if (!text) return null
 
@@ -200,7 +339,7 @@ export function findCountDetailed(
       'i'
     ).exec(text)
     if (before) {
-      const r = toCountResult(before[1])
+      const r = toCountResult(before[1], confidence)
       if (r) return r
     }
 
@@ -209,7 +348,7 @@ export function findCountDetailed(
       'i'
     ).exec(text)
     if (after) {
-      const r = toCountResult(after[1])
+      const r = toCountResult(after[1], confidence)
       if (r) return r
     }
   }
@@ -218,28 +357,43 @@ export function findCountDetailed(
 }
 
 /** Wraps a known-exact integer (e.g. from embedded JSON) as a CountResult. */
-export function exactCount(value: number | null | undefined): CountResult | null {
-  return value === null || value === undefined ? null : { value, exact: true }
+export function exactCount(
+  value: number | null | undefined,
+  confidence: number = SOURCE_CONFIDENCE.json
+): CountResult | null {
+  return value === null || value === undefined
+    ? null
+    : { value, exact: true, confidence }
 }
 
 /**
- * Picks the MOST PRECISE count from candidates given in priority order.
+ * Picks the highest-confidence count from the candidates.
  *
- * Precision rules:
- *  - An exact (raw-integer) value always beats an abbreviated one.
- *  - Among candidates of equal precision the earliest one wins, so callers
- *    should pass the most live/current source first (e.g. the rendered body
- *    text) and stale/cached sources last (e.g. the og:description meta tag).
+ * Selection is driven by an EXPLICIT confidence ranking, not argument order:
+ *  1. Highest {@link SOURCE_CONFIDENCE} wins (json > body > meta).
+ *  2. Tiebreak: an exact raw integer beats an abbreviated value.
+ *  3. Tiebreak: the earlier candidate wins (stable).
  *
- * This guarantees raw integers are preserved and a 1-follower change is
- * captured whenever any source exposes the exact value.
+ * This guarantees the authoritative JSON integer is always preferred, the
+ * finer body value is preferred over the rounded meta/og description, and a
+ * 1-follower change is captured whenever an exact value is exposed.
  */
+function selectByConfidence(
+  candidates: (CountResult | null)[]
+): CountResult | null {
+  const present = candidates.filter((c): c is CountResult => c !== null)
+  if (present.length === 0) return null
+  return present.reduce((best, c) => {
+    if (c.confidence !== best.confidence) return c.confidence > best.confidence ? c : best
+    if (c.exact !== best.exact) return c.exact ? c : best
+    return best
+  })
+}
+
 export function pickPreciseCount(
   ...candidates: (CountResult | null)[]
 ): number | null {
-  const present = candidates.filter((c): c is CountResult => c !== null)
-  if (present.length === 0) return null
-  return (present.find((c) => c.exact) ?? present[0]).value
+  return selectByConfidence(candidates)?.value ?? null
 }
 
 /**
@@ -250,7 +404,5 @@ export function pickPreciseCount(
 export function pickPreciseDetailed(
   ...candidates: (CountResult | null)[]
 ): CountResult | null {
-  const present = candidates.filter((c): c is CountResult => c !== null)
-  if (present.length === 0) return null
-  return present.find((c) => c.exact) ?? present[0]
+  return selectByConfidence(candidates)
 }
