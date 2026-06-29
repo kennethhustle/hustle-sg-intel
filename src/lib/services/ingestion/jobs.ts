@@ -16,7 +16,35 @@ interface JobIngestionResult {
 interface OverallJobResult {
   total_competitors: number
   total_jobs_inserted: number
+  total_deduplicated: number
   results: JobIngestionResult[]
+}
+
+interface RawJob {
+  title: string
+  department: string | null
+  location: string | null
+  job_type: string | null
+  source: string
+  source_url: string | null
+  posted_at: string | null
+  salary_min: number | null
+  salary_max: number | null
+  currency: string
+  raw_data: Record<string, unknown>
+}
+
+// Provenance entry recorded inside raw_data.sources[] when the same logical job
+// is discovered from more than one hiring source.
+interface JobSourceEntry {
+  source: string
+  source_url: string | null
+  posted_at: string | null
+}
+
+interface MergedJob {
+  job: RawJob
+  sources: JobSourceEntry[]
 }
 
 function normalizeJobTitle(title: string): string {
@@ -44,147 +72,95 @@ export async function ingestAllJobs(): Promise<OverallJobResult> {
 
   const allResults: JobIngestionResult[] = []
   let totalInserted = 0
+  let totalDeduplicated = 0
 
   for (const competitor of competitors) {
-    // Track seen job titles to deduplicate within a competitor
-    const seenTitles = new Set<string>()
-
-    // Source 1: MyCareersFuture
+    // Collect every source's results first, preserving the SOURCE_ORDER above.
     const mcfResult = await scrapeMyCareersFuture(competitor.name)
-    const mcfIngested = await ingestJobBatch(
-      supabase,
-      competitor.id,
-      'mycareersfuture',
-      mcfResult.data ?? [],
-      seenTitles
-    )
-    allResults.push({
-      competitor_id: competitor.id,
-      competitor_name: competitor.name,
-      source: 'mycareersfuture',
-      jobs_found: mcfResult.data?.length ?? 0,
-      jobs_inserted: mcfIngested,
-      error: mcfResult.error,
-    })
-    totalInserted += mcfIngested
     await delay(2000)
-
-    // Source 2: Career Page
     const careerResult = await scrapeCareerPage(competitor.website, competitor.name)
-    const careerIngested = await ingestJobBatch(
-      supabase,
-      competitor.id,
-      'career_page',
-      careerResult.data ?? [],
-      seenTitles
-    )
-    allResults.push({
-      competitor_id: competitor.id,
-      competitor_name: competitor.name,
-      source: 'career_page',
-      jobs_found: careerResult.data?.length ?? 0,
-      jobs_inserted: careerIngested,
-      error: careerResult.error,
-    })
-    totalInserted += careerIngested
     await delay(2000)
-
-    // Source 3: JobStreet
     const jsResult = await scrapeJobStreet(competitor.name)
-    const jsIngested = await ingestJobBatch(
-      supabase,
-      competitor.id,
-      'jobstreet',
-      jsResult.data ?? [],
-      seenTitles
-    )
-    allResults.push({
-      competitor_id: competitor.id,
-      competitor_name: competitor.name,
-      source: 'jobstreet',
-      jobs_found: jsResult.data?.length ?? 0,
-      jobs_inserted: jsIngested,
-      error: jsResult.error,
-    })
-    totalInserted += jsIngested
     await delay(2000)
-
-    // Source 4: Indeed
     const indeedResult = await scrapeIndeed(competitor.name)
-    const indeedIngested = await ingestJobBatch(
-      supabase,
-      competitor.id,
-      'indeed',
-      indeedResult.data ?? [],
-      seenTitles
-    )
-    allResults.push({
-      competitor_id: competitor.id,
-      competitor_name: competitor.name,
-      source: 'indeed',
-      jobs_found: indeedResult.data?.length ?? 0,
-      jobs_inserted: indeedIngested,
-      error: indeedResult.error,
-    })
-    totalInserted += indeedIngested
     await delay(3000)
+
+    const sources: Array<{ name: string; jobs: RawJob[]; error: string | null }> = [
+      { name: 'mycareersfuture', jobs: mcfResult.data ?? [], error: mcfResult.error },
+      { name: 'career_page', jobs: careerResult.data ?? [], error: careerResult.error },
+      { name: 'jobstreet', jobs: jsResult.data ?? [], error: jsResult.error },
+      { name: 'indeed', jobs: indeedResult.data ?? [], error: indeedResult.error },
+    ]
+
+    // Deduplicate across ALL sources by normalized title. The first source to
+    // report a logical job owns the stored row; every other source that reports
+    // the same job is folded into raw_data.sources[] instead of a new row.
+    const merged = new Map<string, MergedJob>()
+    const insertedBySource: Record<string, number> = {}
+    let competitorDedup = 0
+
+    for (const { name, jobs } of sources) {
+      for (const job of jobs) {
+        const key = normalizeJobTitle(job.title)
+        if (!key) continue
+        const entry: JobSourceEntry = {
+          source: job.source ?? name,
+          source_url: job.source_url,
+          posted_at: job.posted_at,
+        }
+        const existing = merged.get(key)
+        if (existing) {
+          if (!existing.sources.some((s) => s.source === entry.source)) {
+            existing.sources.push(entry)
+          }
+          competitorDedup++
+        } else {
+          merged.set(key, { job: { ...job, source: job.source ?? name }, sources: [entry] })
+          insertedBySource[name] = (insertedBySource[name] ?? 0) + 1
+        }
+      }
+    }
+
+    // Insert one row per logical job, carrying all discovered sources.
+    for (const { job, sources: provenance } of merged.values()) {
+      const { error: insertError } = await supabase.from('job_postings').insert({
+        competitor_id: competitor.id,
+        title: job.title,
+        department: job.department,
+        location: job.location,
+        job_type: job.job_type,
+        source: job.source,
+        source_url: job.source_url,
+        posted_at: job.posted_at,
+        is_active: true,
+        salary_min: job.salary_min,
+        salary_max: job.salary_max,
+        currency: job.currency ?? 'SGD',
+        raw_data: { ...job.raw_data, sources: provenance },
+      })
+      if (!insertError) totalInserted++
+    }
+
+    totalDeduplicated += competitorDedup
+
+    for (const { name, jobs, error: sourceError } of sources) {
+      allResults.push({
+        competitor_id: competitor.id,
+        competitor_name: competitor.name,
+        source: name,
+        jobs_found: jobs.length,
+        jobs_inserted: insertedBySource[name] ?? 0,
+        error: sourceError,
+      })
+    }
   }
 
   return {
     total_competitors: competitors.length,
     total_jobs_inserted: totalInserted,
+    total_deduplicated: totalDeduplicated,
     results: allResults,
   }
-}
-
-async function ingestJobBatch(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  supabase: any,
-  competitorId: string,
-  source: string,
-  jobs: Array<{
-    title: string
-    department: string | null
-    location: string | null
-    job_type: string | null
-    source: string
-    source_url: string | null
-    posted_at: string | null
-    salary_min: number | null
-    salary_max: number | null
-    currency: string
-    raw_data: Record<string, unknown>
-  }>,
-  seenTitles: Set<string>
-): Promise<number> {
-  if (jobs.length === 0) return 0
-
-  let inserted = 0
-  for (const job of jobs) {
-    const normalizedTitle = normalizeJobTitle(job.title)
-    if (seenTitles.has(normalizedTitle)) continue
-    seenTitles.add(normalizedTitle)
-
-    const { error } = await supabase.from('job_postings').insert({
-      competitor_id: competitorId,
-      title: job.title,
-      department: job.department,
-      location: job.location,
-      job_type: job.job_type,
-      source: job.source ?? source,
-      source_url: job.source_url,
-      posted_at: job.posted_at,
-      is_active: true,
-      salary_min: job.salary_min,
-      salary_max: job.salary_max,
-      currency: job.currency ?? 'SGD',
-      raw_data: job.raw_data,
-    })
-
-    if (!error) inserted++
-  }
-
-  return inserted
 }
 
 function delay(ms: number): Promise<void> {

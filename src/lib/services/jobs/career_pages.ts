@@ -63,45 +63,104 @@ async function fetchCareerPage(website: string): Promise<{ html: string; url: st
   return null
 }
 
+// --- Strict role-title validation -------------------------------------------
+// The career-page scraper walks arbitrary marketing HTML, so it must reject
+// perk/benefit/marketing lines and only keep text that reads like a real role.
+const REJECT_TITLE_PATTERNS: RegExp[] = [
+  /\bbenefits?\b/i,
+  /\bbonus(es)?\b/i,
+  /\bperks?\b/i,
+  /career growth/i,
+  /growth opportunit/i,
+  /flexi[\s-]?cash/i,
+  /\bmedical\b|\bdental\b/i,
+  /hybrid work/i,
+  /work arrangement/i,
+  /company\s*(?:&|and)?\s*performance/i,
+  /performance bonus/i,
+  /annual leave/i,
+  /nurturing environment/i,
+  /insurance|allowance/i,
+  /projected to reach/i,
+  /market is projected/i,
+  /\btrillion\b|\bbillion\b/i,
+]
+
+// Whitelisted role signals — at least one must appear for the unstructured
+// (job-card / link / heading) extraction paths to accept a title.
+const ROLE_KEYWORD_RE =
+  /\b(trainer|instructor|teacher|tutor|lecturer|executive|manager|consultant|specialist|designer|developer|engineer|analyst|sales|marketing|content creator|copywriter|editor|producer|business development|finance|accountant|operations|coordinator|director|administrator|admin|officer|associate|recruiter|human resource|hr|strategist|assistant|technician|architect|scientist|advisor|planner|representative|supervisor|intern)\b/i
+
+/** True for paragraphs, sentences, and perk/benefit/marketing lines. */
+function isRejectedTitle(title: string): boolean {
+  const t = title.trim()
+  if (!t || t.length < 3 || t.length > 80) return true
+  const words = t.split(/\s+/)
+  if (words.length > 10) return true
+  if (/[.!?]$/.test(t) && words.length > 6) return true
+  return REJECT_TITLE_PATTERNS.some((re) => re.test(t))
+}
+
+/** Stricter check for unstructured text: must look like an actual job role. */
+function looksLikeRole(title: string): boolean {
+  const t = title.trim()
+  if (isRejectedTitle(t)) return false
+  return ROLE_KEYWORD_RE.test(t)
+}
+
+function resolveUrl(link: string | undefined, baseUrl: string): string {
+  if (!link) return baseUrl
+  if (link.startsWith('http')) return link
+  return `${new URL(baseUrl).origin}${link.startsWith('/') ? '' : '/'}${link}`
+}
+
 function extractJobsFromHTML(html: string, baseUrl: string): CareerPageJob[] {
   const $ = cheerio.load(html)
   const jobs: CareerPageJob[] = []
+  const seen = new Set<string>()
 
-  // Try JSON-LD structured data first
+  const add = (job: CareerPageJob) => {
+    const key = job.title.trim().toLowerCase()
+    if (!key || seen.has(key)) return
+    seen.add(key)
+    jobs.push(job)
+  }
+
+  // 1. Structured data first: JSON-LD JobPosting. Authoritative, so only the
+  //    obvious-non-job reject list is applied (no role-keyword requirement).
   $('script[type="application/ld+json"]').each((_, script) => {
     try {
       const data = JSON.parse($(script).html() || '{}')
       const items = Array.isArray(data) ? data : [data]
       for (const item of items) {
-        if (item['@type'] === 'JobPosting') {
-          jobs.push({
-            title: item.title || '',
-            department: item.occupationalCategory || null,
-            location:
-              item.jobLocation?.address?.addressLocality ||
-              item.jobLocation?.address?.addressRegion ||
-              'Singapore',
-            job_type: item.employmentType || null,
-            source: 'career_page',
-            source_url: item.url || baseUrl,
-            posted_at: item.datePosted
-              ? new Date(item.datePosted).toISOString()
-              : null,
-            salary_min: item.baseSalary?.value?.minValue || null,
-            salary_max: item.baseSalary?.value?.maxValue || null,
-            currency: item.baseSalary?.currency || 'SGD',
-            raw_data: item as Record<string, unknown>,
-          })
-        }
+        if (item['@type'] !== 'JobPosting') continue
+        const title = (item.title || '').trim()
+        if (!title || isRejectedTitle(title)) continue
+        add({
+          title,
+          department: item.occupationalCategory || null,
+          location:
+            item.jobLocation?.address?.addressLocality ||
+            item.jobLocation?.address?.addressRegion ||
+            'Singapore',
+          job_type: item.employmentType || null,
+          source: 'career_page',
+          source_url: item.url || baseUrl,
+          posted_at: item.datePosted ? new Date(item.datePosted).toISOString() : null,
+          salary_min: item.baseSalary?.value?.minValue || null,
+          salary_max: item.baseSalary?.value?.maxValue || null,
+          currency: item.baseSalary?.currency || 'SGD',
+          raw_data: item as Record<string, unknown>,
+        })
       }
     } catch {
-      // Ignore
+      // Ignore malformed JSON-LD
     }
   })
 
   if (jobs.length > 0) return jobs
 
-  // Generic HTML extraction — look for job listing patterns
+  // 2. Job cards / career listing sections — must read like a real role.
   const jobSelectors = [
     '[class*="job-listing"]',
     '[class*="job-card"]',
@@ -114,47 +173,22 @@ function extractJobsFromHTML(html: string, baseUrl: string): CareerPageJob[] {
     'div[class*="job-item"]',
     'tr[class*="job"]',
   ]
-
   for (const selector of jobSelectors) {
     $(selector).each((_, el) => {
       const $el = $(el)
-      const title = $el
-        .find('h1, h2, h3, h4, [class*="title"], strong')
-        .first()
-        .text()
-        .trim()
-      const location = $el
-        .find('[class*="location"], [class*="place"]')
-        .first()
-        .text()
-        .trim()
-      const jobType = $el
-        .find('[class*="type"], [class*="employment"]')
-        .first()
-        .text()
-        .trim()
+      const title = $el.find('h1, h2, h3, h4, [class*="title"], strong').first().text().trim()
+      if (!looksLikeRole(title)) return
+      const location = $el.find('[class*="location"], [class*="place"]').first().text().trim()
+      const jobType = $el.find('[class*="type"], [class*="employment"]').first().text().trim()
+      const department = $el.find('[class*="department"], [class*="team"]').first().text().trim()
       const link = $el.find('a').first().attr('href')
-      const department = $el
-        .find('[class*="department"], [class*="team"]')
-        .first()
-        .text()
-        .trim()
-
-      if (!title || title.length < 3) return
-
-      const resolvedUrl = link
-        ? link.startsWith('http')
-          ? link
-          : `${new URL(baseUrl).origin}${link.startsWith('/') ? '' : '/'}${link}`
-        : baseUrl
-
-      jobs.push({
+      add({
         title,
         department: department || null,
         location: location || 'Singapore',
         job_type: jobType || null,
         source: 'career_page',
-        source_url: resolvedUrl,
+        source_url: resolveUrl(link, baseUrl),
         posted_at: null,
         salary_min: null,
         salary_max: null,
@@ -165,48 +199,53 @@ function extractJobsFromHTML(html: string, baseUrl: string): CareerPageJob[] {
     if (jobs.length > 0) break
   }
 
-  // If still nothing, try generic heading + link pattern
-  if (jobs.length === 0) {
-    $('h3, h4').each((_, el) => {
-      const $el = $(el)
-      const text = $el.text().trim()
-      const link = $el.closest('a').attr('href') || $el.find('a').attr('href')
-      // Filter out navigation/generic headings
-      if (
-        text.length > 5 &&
-        text.length < 100 &&
-        (text.toLowerCase().includes('engineer') ||
-          text.toLowerCase().includes('manager') ||
-          text.toLowerCase().includes('director') ||
-          text.toLowerCase().includes('analyst') ||
-          text.toLowerCase().includes('coordinator') ||
-          text.toLowerCase().includes('developer') ||
-          text.toLowerCase().includes('designer') ||
-          text.toLowerCase().includes('executive') ||
-          text.toLowerCase().includes('specialist') ||
-          text.toLowerCase().includes('trainer') ||
-          text.toLowerCase().includes('instructor'))
-      ) {
-        jobs.push({
-          title: text,
-          department: null,
-          location: 'Singapore',
-          job_type: null,
-          source: 'career_page',
-          source_url: link
-            ? link.startsWith('http')
-              ? link
-              : `${new URL(baseUrl).origin}${link}`
-            : baseUrl,
-          posted_at: null,
-          salary_min: null,
-          salary_max: null,
-          currency: 'SGD',
-          raw_data: { title: text, link },
-        })
-      }
+  if (jobs.length > 0) return jobs
+
+  // 3. Application links — anchors pointing at a job/apply page whose visible
+  //    text reads like a role.
+  $(
+    'a[href*="job"], a[href*="career"], a[href*="apply"], a[href*="position"], a[href*="vacanc"], a[href*="role"], a[href*="opening"]'
+  ).each((_, el) => {
+    const $a = $(el)
+    const title = $a.text().trim()
+    if (!looksLikeRole(title)) return
+    add({
+      title,
+      department: null,
+      location: 'Singapore',
+      job_type: null,
+      source: 'career_page',
+      source_url: resolveUrl($a.attr('href'), baseUrl),
+      posted_at: null,
+      salary_min: null,
+      salary_max: null,
+      currency: 'SGD',
+      raw_data: { title, link: $a.attr('href') ?? null },
     })
-  }
+  })
+
+  if (jobs.length > 0) return jobs
+
+  // 4. Last-resort heading / list-item fallback — strict role check only.
+  $('h2, h3, h4, li').each((_, el) => {
+    const $el = $(el)
+    const text = $el.text().trim()
+    if (!looksLikeRole(text)) return
+    const link = $el.closest('a').attr('href') || $el.find('a').attr('href')
+    add({
+      title: text,
+      department: null,
+      location: 'Singapore',
+      job_type: null,
+      source: 'career_page',
+      source_url: resolveUrl(link, baseUrl),
+      posted_at: null,
+      salary_min: null,
+      salary_max: null,
+      currency: 'SGD',
+      raw_data: { title: text, link: link ?? null },
+    })
+  })
 
   return jobs
 }
