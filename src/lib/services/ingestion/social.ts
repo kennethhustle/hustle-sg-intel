@@ -94,7 +94,7 @@ export async function ingestAllSocial(): Promise<OverallResult> {
     const RETRY_COOLDOWN_MS = [60_000, 120_000, 180_000, 240_000]
     for (let round = 0; round < RETRY_COOLDOWN_MS.length; round++) {
       const pending = workItems.filter(({ competitor, profile }) => {
-        if (profile.platform !== 'instagram') return false
+        if (profile.platform !== 'instagram' && profile.platform !== 'linkedin') return false
         const r = results.find(
           (x) => x.competitor_id === competitor.id && x.platform === profile.platform
         )
@@ -103,7 +103,7 @@ export async function ingestAllSocial(): Promise<OverallResult> {
       if (pending.length === 0) break
 
       console.log(
-        `[social] retry round ${round + 1}: ${pending.length} Instagram account(s) ` +
+        `[social] retry round ${round + 1}: ${pending.length} account(s) ` +
           `awaiting an exact value — cooling down ${RETRY_COOLDOWN_MS[round] / 1000}s`
       )
       await delay(RETRY_COOLDOWN_MS[round])

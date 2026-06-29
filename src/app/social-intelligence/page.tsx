@@ -11,10 +11,17 @@
  */
 
 import type { ReactNode } from 'react'
+import { Instagram, Facebook, Linkedin, Youtube } from 'lucide-react'
 import { createClient } from '@/lib/supabase/server'
 import { AppLayout } from '@/components/layout/app-layout'
 
 export const revalidate = 300
+
+// ─── Platform icons (TikTok has no lucide brand icon → plain text) ─────────────
+const PLATFORM_ICON: Record<string, React.ComponentType<{ className?: string }> | undefined> = {
+  Instagram, Facebook, LinkedIn: Linkedin, YouTube: Youtube,
+}
+
 
 // ─── Theme colours ────────────────────────────────────────────────────────────
 const THEME_COLOR: Record<string, string> = {
@@ -140,6 +147,7 @@ async function getData() {
     ytUrl: string | null; ttUrl: string | null
     totalAudience: number | null
     growth24h: number | null; growthPct: number | null; topGrowthPlatform: string | null
+    platformGrowth: Array<{ label: string; delta: number | null; pct: number | null }>
     posts30d: number | null; postFrequency: string
   }
 
@@ -182,14 +190,16 @@ async function getData() {
     let hasPrev = false
     let topGrowthPlatform: string | null = null
     let topDelta = 0
+    const platformGrowth: Array<{ label: string; delta: number | null; pct: number | null }> = []
     for (const p of platformDeltas) {
-      if (p.cur < 0) continue
+      if (p.cur < 0) { platformGrowth.push({ label: p.label, delta: null, pct: null }); continue }
       const prev = prevFollowerMap.get(`${c.id}:${p.key}`)
-      if (prev === null || prev === undefined) continue
+      if (prev === null || prev === undefined) { platformGrowth.push({ label: p.label, delta: null, pct: null }); continue }
       hasPrev = true
       const delta = p.cur - prev
       growthSum += delta
       prevSum += prev
+      platformGrowth.push({ label: p.label, delta, pct: prev > 0 ? (delta / prev) * 100 : null })
       if (delta > topDelta) { topDelta = delta; topGrowthPlatform = p.label }
     }
     const growth24h = hasPrev ? growthSum : null
@@ -208,6 +218,7 @@ async function getData() {
       igUrl, fbUrl, liUrl, ytUrl, ttUrl,
       totalAudience,
       growth24h, growthPct, topGrowthPlatform,
+      platformGrowth,
       posts30d, postFrequency,
     }
   })
@@ -347,9 +358,32 @@ export default async function SocialIntelligencePage() {
                       <div className="text-[11px] text-slate-400">
                         Current total: <span className="font-mono text-white">{comp.totalAudience !== null ? comp.totalAudience.toLocaleString() : '—'}</span>
                       </div>
-                      <div className="pt-2 border-t border-slate-800/60">
-                        <div className="text-[9px] font-mono text-slate-600 tracking-widest mb-1">TOP PLATFORM</div>
-                        <p className="text-[11px] text-indigo-300 leading-snug">{comp.topGrowthPlatform ?? '—'}</p>
+                      <div className="pt-2 border-t border-slate-800/60 space-y-1.5">
+                        {comp.platformGrowth.map((p) => {
+                          const Icon = PLATFORM_ICON[p.label]
+                          const label = (
+                            <span className="flex items-center gap-1.5 text-slate-500">
+                              {Icon ? <Icon className="w-3 h-3 shrink-0" /> : null}{p.label}
+                            </span>
+                          )
+                          if (p.delta === null) {
+                            return (
+                              <div key={p.label} className="flex items-center justify-between text-[11px]">
+                                {label}
+                                <span className="text-slate-600 font-mono">—</span>
+                              </div>
+                            )
+                          }
+                          const up = p.delta > 0, dn = p.delta < 0
+                          const col = up ? 'text-green-400' : dn ? 'text-red-400' : 'text-slate-400'
+                          const pctTxt = p.pct !== null ? ` (${p.pct >= 0 ? '+' : ''}${p.pct.toFixed(1)}%)` : ''
+                          return (
+                            <div key={p.label} className="flex items-center justify-between text-[11px]">
+                              {label}
+                              <span className={`${col} font-mono`}>{up ? '▲ +' : dn ? '▼ ' : ''}{p.delta.toLocaleString()}{pctTxt}</span>
+                            </div>
+                          )
+                        })}
                       </div>
                     </div>
                   </div>
