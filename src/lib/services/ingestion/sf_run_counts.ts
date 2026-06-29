@@ -20,13 +20,24 @@ import { createServiceClient } from '@/lib/supabase/server'
 
 const COURSES_PER_PROVIDER = 5
 const BATCH_SIZE = 3
-const PAGE_WAIT_MS = 6000 // wait for JS render
-const RUN_COUNT_REGEX = /Showing\s+[\d\-–]+\s+of\s+(\d+)\s+course\s+run/i
+const RUN_COUNT_TIMEOUT_MS = 20000 // max wait for the run-count text to hydrate
+
+// Priority-ordered patterns. New MySkillsFuture app (courses.myskillsfuture.gov.sg)
+// renders "View all N course runs" / "Apply to one of the N available course dates";
+// legacy portal rendered "Showing X–Y of N course runs". First match wins.
+const RUN_COUNT_PATTERNS: { source: RunCountSource; re: RegExp }[] = [
+  { source: 'view_all',         re: /View\s+all\s+(\d+)\s+course\s+runs?/i },
+  { source: 'available_dates',  re: /one\s+of\s+the\s+(\d+)\s+available\s+course\s+dates?/i },
+  { source: 'legacy',           re: /Showing\s+[\d\-–]+\s+of\s+(\d+)\s+course\s+run/i },
+]
+
+export type RunCountSource = 'view_all' | 'available_dates' | 'legacy' | 'failed_keep_previous'
 
 export interface RunCountResult {
   sf_ref_no: string
   course_url: string
   upcoming_run_count: number
+  source: RunCountSource
   error: string | null
 }
 
@@ -183,12 +194,15 @@ async function launchBrowser(): Promise<puppeteer.Browser> {
   })
 }
 
-/** Extract run count from page text, returns null if not found */
-function extractRunCount(text: string): number | null {
-  const match = text.match(RUN_COUNT_REGEX)
-  if (!match) return null
-  const count = parseInt(match[1], 10)
-  return isNaN(count) ? null : count
+/** Extract run count from page text using priority patterns; null if none match */
+function extractRunCount(text: string): { count: number; source: RunCountSource } | null {
+  for (const { source, re } of RUN_COUNT_PATTERNS) {
+    const match = text.match(re)
+    if (!match) continue
+    const count = parseInt(match[1], 10)
+    if (!isNaN(count)) return { count, source }
+  }
+  return null
 }
 
 /** Scrape a single batch of URLs in parallel using one browser instance */
@@ -223,26 +237,36 @@ async function scrapeBatch(
 
   const pages = await Promise.all(pagePromises)
 
-  // Wait once for JS to render run count text
-  await new Promise<void>((resolve) => setTimeout(resolve, PAGE_WAIT_MS))
-
-  // Read all pages
+  // Read all pages, waiting per-page until the run-count text hydrates.
   const results: RunCountResult[] = []
   for (const { page, sf_ref_no, course_url } of pages) {
     try {
+      // SPA renders the schedule asynchronously — poll until any supported
+      // run-count phrase appears instead of sleeping a fixed interval.
+      await page
+        .waitForFunction(
+          () =>
+            /View\s+all\s+\d+\s+course\s+runs?/i.test(document.body?.innerText ?? '') ||
+            /one\s+of\s+the\s+\d+\s+available\s+course\s+dates?/i.test(document.body?.innerText ?? '') ||
+            /Showing\s+[\d\-–]+\s+of\s+\d+\s+course\s+run/i.test(document.body?.innerText ?? ''),
+          { timeout: RUN_COUNT_TIMEOUT_MS }
+        )
+        .catch(() => {})
       const text = await page.evaluate(() => document.body?.innerText ?? '')
-      const count = extractRunCount(text)
+      const hit = extractRunCount(text)
       results.push({
         sf_ref_no,
         course_url,
-        upcoming_run_count: count ?? 0,
-        error: count === null ? 'Run count text not found on page' : null,
+        upcoming_run_count: hit?.count ?? 0,
+        source: hit?.source ?? 'failed_keep_previous',
+        error: hit === null ? 'Run count text not found on page' : null,
       })
     } catch (err) {
       results.push({
         sf_ref_no,
         course_url,
         upcoming_run_count: 0,
+        source: 'failed_keep_previous',
         error: err instanceof Error ? err.message : String(err),
       })
     } finally {
@@ -305,7 +329,7 @@ export async function scrapeAndUpdateRunCounts(): Promise<RunCountSummary> {
     const oldCount = sel?.old_count ?? 0
 
     if (result.error !== null) {
-      console.warn(`[runcount] FAIL  provider="${provider}" ref=${result.sf_ref_no} old=${oldCount} -> ${result.error}`)
+      console.warn(`[runcount] FAIL  [source=failed_keep_previous] provider="${provider}" ref=${result.sf_ref_no} old=${oldCount} keep=${oldCount} -> ${result.error}`)
       continue
     }
 
@@ -317,7 +341,7 @@ export async function scrapeAndUpdateRunCounts(): Promise<RunCountSummary> {
     if (!updateErr) {
       updated++
       const delta = result.upcoming_run_count - oldCount
-      console.log(`[runcount] OK    provider="${provider}" ref=${result.sf_ref_no} old=${oldCount} new=${result.upcoming_run_count} (${delta >= 0 ? '+' : ''}${delta})`)
+      console.log(`[runcount] OK    [source=${result.source}] provider="${provider}" ref=${result.sf_ref_no} old=${oldCount} new=${result.upcoming_run_count} (${delta >= 0 ? '+' : ''}${delta})`)
     } else {
       console.error(`[runcount] DBERR provider="${provider}" ref=${result.sf_ref_no}: ${updateErr.message}`)
     }
