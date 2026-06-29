@@ -88,6 +88,17 @@ async function getData() {
     followerMap.set(key, s.follower_count)
   }
 
+  // ── Previous follower snapshot per competitor + platform ────────────────────
+  // The 2nd row seen per key (snapshots still ordered desc) = the prior day's
+  // verified value. Enables 24h growth deltas computed entirely from history.
+  const prevFollowerMap = new Map<string, number | null>()
+  const seenLatestKey = new Set<string>()
+  for (const s of snapshots) {
+    const key = `${s.competitor_id}:${s.platform}`
+    if (!seenLatestKey.has(key)) { seenLatestKey.add(key); continue }
+    if (!prevFollowerMap.has(key)) prevFollowerMap.set(key, s.follower_count)
+  }
+
   // ── Public profile URL per competitor + platform ────────────────────────────
   // Sourced from social_profiles so leaderboard metrics can link out to the
   // competitor's live profile. First non-empty url per (competitor, platform).
@@ -128,6 +139,7 @@ async function getData() {
     igUrl: string | null; fbUrl: string | null; liUrl: string | null
     ytUrl: string | null; ttUrl: string | null
     totalAudience: number | null
+    growth24h: number | null; growthPct: number | null; topGrowthPlatform: string | null
     posts30d: number | null; postFrequency: string
   }
 
@@ -157,6 +169,32 @@ async function getData() {
       ? audienceParts.reduce((a, b) => a + b, 0)
       : null
 
+    // ── 24h growth: sum of per-platform deltas where a prior snapshot exists ──
+    const platformDeltas: Array<{ label: string; cur: number; key: string }> = [
+      { label: 'Instagram', cur: igFollowers ?? -1, key: 'instagram' },
+      { label: 'Facebook', cur: fbFollowers ?? -1, key: 'facebook' },
+      { label: 'LinkedIn', cur: liFollowers ?? -1, key: 'linkedin' },
+      { label: 'YouTube', cur: ytSubs ?? -1, key: 'youtube' },
+      { label: 'TikTok', cur: ttFollowers ?? -1, key: 'tiktok' },
+    ]
+    let growthSum = 0
+    let prevSum = 0
+    let hasPrev = false
+    let topGrowthPlatform: string | null = null
+    let topDelta = 0
+    for (const p of platformDeltas) {
+      if (p.cur < 0) continue
+      const prev = prevFollowerMap.get(`${c.id}:${p.key}`)
+      if (prev === null || prev === undefined) continue
+      hasPrev = true
+      const delta = p.cur - prev
+      growthSum += delta
+      prevSum += prev
+      if (delta > topDelta) { topDelta = delta; topGrowthPlatform = p.label }
+    }
+    const growth24h = hasPrev ? growthSum : null
+    const growthPct = hasPrev && prevSum > 0 ? (growthSum / prevSum) * 100 : null
+
     // Posting frequency not yet tracked
     const posts30d: number | null = null
     const postFrequency = 'Data unavailable'
@@ -169,6 +207,7 @@ async function getData() {
       igFollowers, fbFollowers, liFollowers, ttFollowers,
       igUrl, fbUrl, liUrl, ytUrl, ttUrl,
       totalAudience,
+      growth24h, growthPct, topGrowthPlatform,
       posts30d, postFrequency,
     }
   })
@@ -196,87 +235,12 @@ async function getData() {
   // ── Content library rank (YouTube videos) ─────────────────────────────────
   const contentRanked = [...intel].filter(c => c.ytVideos !== null).sort((a, b) => (b.ytVideos ?? 0) - (a.ytVideos ?? 0))
 
-  // ── Build threat radar from real signals ─────────────────────────────────
-  type Threat = {
-    competitor: Intel
-    level: 'CRITICAL' | 'HIGH' | 'MEDIUM'
-    headline: string
-    metric: string
-    reason: string
-    action: string
-  }
-
-  const threats: Threat[] = [
-    {
-      competitor: intel.find(c => c.name.includes('BELLS'))!,
-      level: 'CRITICAL',
-      headline: '109 upcoming course runs',
-      metric: '109',
-      reason: 'Single course has 102 available dates — students see more BELLS slots and book BELLS first.',
-      action: "Add more dates to Hustle's top courses",
-    },
-    {
-      competitor: intel.find(c => c.name.includes('InfoTech'))!,
-      level: 'HIGH',
-      headline: '77 runs on one AI course',
-      metric: '91',
-      reason: 'Concentrated AI training with 91 upcoming runs total. Aggressively capturing the SkillsFuture AI market.',
-      action: 'Launch more AI / Data training courses',
-    },
-    {
-      competitor: intel.find(c => c.name.includes('Heicoders'))!,
-      level: 'HIGH',
-      headline: 'YouTube audience leader',
-      metric: '673',
-      reason: '673 YouTube subscribers. AI content drives organic discovery — students find Heicoders before Hustle on YouTube.',
-      action: 'Publish YouTube content to compete for AI queries',
-    },
-    {
-      competitor: intel.find(c => c.name.includes('Vertical'))!,
-      level: 'HIGH',
-      headline: '256 YouTube videos published',
-      metric: '256',
-      reason: 'Highest content library in the market. 256 videos = dominates YouTube search results for Data Analytics training.',
-      action: 'Increase video publishing frequency immediately',
-    },
-    {
-      competitor: intel.find(c => c.name.includes('ASK'))!,
-      level: 'MEDIUM',
-      headline: '99 courses on SkillsFuture',
-      metric: '99',
-      reason: "Largest course catalogue — 7× Hustle's 14 courses. Students searching SkillsFuture find ASK first.",
-      action: 'Expand course catalogue on SkillsFuture portal',
-    },
-  ].filter(t => t.competitor != null)
-
-  // ── Growth alerts from real data ──────────────────────────────────────────
-  const growthAlerts: Array<{ severity: string; text: string; subtext: string }> = [
-    {
-      severity: 'critical',
-      text: 'BELLS Institute has 109 upcoming course runs — #1 in market capacity.',
-      subtext: 'Hustle has 65. Gap: 44 runs. Students see BELLS first on availability searches.',
-    },
-    {
-      severity: 'critical',
-      text: 'InfoTech Academy concentrated 77 runs on a single AI course.',
-      subtext: "Signals aggressive AI market capture. Direct threat to Hustle's training audience.",
-    },
-    {
-      severity: 'high',
-      text: 'Heicoders Academy leads YouTube with 673 subscribers in AI/Data Analytics.',
-      subtext: 'Hustle has no tracked YouTube audience. Organic discovery gap growing daily.',
-    },
-    {
-      severity: 'high',
-      text: 'Vertical Institute published 256 YouTube videos — most in the market.',
-      subtext: '560 subscribers. Vertical likely dominates YouTube search for training queries.',
-    },
-    {
-      severity: 'medium',
-      text: "ASK Training lists 99 courses on SkillsFuture — 7× Hustle's catalogue.",
-      subtext: 'Broader catalogue = more search surface area on MySkillsFuture portal.',
-    },
-  ]
+  // ── Top 5 fastest-growing competitors over the last 24h (DB-derived) ───────
+  const growthBoard = [...intel]
+    .filter(c => c.growth24h !== null)
+    .sort((a, b) => (b.growth24h ?? 0) - (a.growth24h ?? 0))
+    .slice(0, 5)
+  const growthAlerts: Array<{ severity: string; text: string; subtext: string }> = []
 
   // Add any real DB alerts
   const dbAlerts = alerts.slice(0, 3).map(a => ({
@@ -292,7 +256,7 @@ async function getData() {
   const recommendation = hustleIntel ? buildRecommendation(hustleIntel, hustleCourseRank, hustleCourseGap, ytRanked.length, hustleYtRank) : ''
 
   return {
-    intel, audienceBoard, threats, allGrowthAlerts,
+    intel, audienceBoard, growthBoard, allGrowthAlerts,
     hustleIntel, hustleAudienceRank, hustleCourseRank, hustleCourseGap,
     marketCourseLeader, ytLeader, contentRanked, ytRanked, hustleYtRank,
     recommendation,
@@ -327,7 +291,7 @@ function H2({ children, sub }: { children: ReactNode; sub?: string }) {
 // ─── Page ─────────────────────────────────────────────────────────────────────
 export default async function SocialIntelligencePage() {
   const {
-    audienceBoard, threats, allGrowthAlerts,
+    audienceBoard, growthBoard, allGrowthAlerts,
     hustleIntel, hustleAudienceRank, hustleCourseRank, hustleCourseGap,
     marketCourseLeader, ytLeader, contentRanked, ytRanked, hustleYtRank,
     recommendation,
@@ -348,45 +312,53 @@ export default async function SocialIntelligencePage() {
     <AppLayout title="Social Intelligence" lastUpdated={sgDate} module="social">
       <div className="space-y-8 max-w-full">
 
-        {/* ─── SECTION 1: MARKET THREAT RADAR ─────────────────────────────── */}
+        {/* ─── SECTION 1: AUDIENCE GROWTH INTELLIGENCE ────────────────────── */}
         <section>
-          <H2 sub="Which competitors should Hustle be most worried about right now?">
-            Market Threat Radar
+          <H2 sub="Which competitors gained the most audience over the last 24 hours?">
+            Audience Growth Intelligence
           </H2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
-            {threats.map((threat) => {
-              const cfg = severityConfig[threat.level.toLowerCase() as keyof typeof severityConfig] ?? severityConfig.medium
-              return (
-                <div key={threat.competitor.id} className="bg-slate-900/60 border border-slate-800 rounded-xl overflow-hidden flex flex-col">
-                  {/* Threat level bar */}
-                  <div className={`h-1 ${cfg.bar}`} />
-                  <div className="p-4 flex flex-col flex-1 gap-3">
-                    {/* Header */}
-                    <div className="flex items-start justify-between gap-2">
+          {growthBoard.length === 0 ? (
+            <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-6 text-sm text-slate-500">
+              Not enough history yet — 24h growth appears once two daily snapshots exist.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
+              {growthBoard.map((comp) => {
+                const inc = comp.growth24h ?? 0
+                const up = inc > 0, down = inc < 0
+                const tone = up ? 'bg-green-500' : down ? 'bg-red-500' : 'bg-slate-500'
+                const incColor = up ? 'text-green-400' : down ? 'text-red-400' : 'text-slate-400'
+                const sign = inc > 0 ? '+' : ''
+                const pct = comp.growthPct
+                return (
+                  <div key={comp.id} className="bg-slate-900/60 border border-slate-800 rounded-xl overflow-hidden flex flex-col">
+                    <div className={`h-1 ${tone}`} />
+                    <div className="p-4 flex flex-col flex-1 gap-3">
                       <div className="flex items-center gap-2 min-w-0">
-                        <div className="w-2 h-2 rounded-full shrink-0 mt-0.5" style={{ backgroundColor: threat.competitor.color }} />
-                        <span className="text-sm font-bold text-white leading-tight">{threat.competitor.name}</span>
+                        <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: comp.color }} />
+                        <span className="text-sm font-bold text-white leading-tight">{comp.name}</span>
                       </div>
-                      <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded border shrink-0 ${cfg.badge}`}>{threat.level}</span>
-                    </div>
-                    {/* Key metric */}
-                    <div>
-                      <div className="text-3xl font-mono font-black text-white">{threat.metric}</div>
-                      <div className="text-xs text-slate-400 mt-0.5">{threat.headline}</div>
-                    </div>
-                    {/* Why care */}
-                    <p className="text-[11px] text-slate-400 leading-relaxed flex-1">{threat.reason}</p>
-                    {/* Action */}
-                    <div className="pt-2 border-t border-slate-800/60">
-                      <div className="text-[9px] font-mono text-slate-600 tracking-widest mb-1">ACTION</div>
-                      <p className="text-[11px] text-indigo-300 leading-snug">{threat.action}</p>
+                      <div>
+                        <div className={`text-3xl font-mono font-black ${incColor}`}>{sign}{inc.toLocaleString()}</div>
+                        <div className="text-xs text-slate-400 mt-0.5">
+                          Followers · {pct !== null ? `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%` : 'New'}
+                        </div>
+                      </div>
+                      <div className="text-[11px] text-slate-400">
+                        Current total: <span className="font-mono text-white">{comp.totalAudience !== null ? comp.totalAudience.toLocaleString() : '—'}</span>
+                      </div>
+                      <div className="pt-2 border-t border-slate-800/60">
+                        <div className="text-[9px] font-mono text-slate-600 tracking-widest mb-1">TOP PLATFORM</div>
+                        <p className="text-[11px] text-indigo-300 leading-snug">{comp.topGrowthPlatform ?? '—'}</p>
+                      </div>
                     </div>
                   </div>
-                </div>
-              )
-            })}
-          </div>
+                )
+              })}
+            </div>
+          )}
         </section>
+
 
         {/* ─── SECTION 2: AUDIENCE LEADERBOARD ────────────────────────────── */}
         <section>
@@ -405,6 +377,7 @@ export default async function SocialIntelligencePage() {
                   <th className="px-4 py-3 text-right text-[10px] font-mono tracking-widest text-slate-500">YOUTUBE</th>
                   <th className="px-4 py-3 text-right text-[10px] font-mono tracking-widest text-slate-500">TIKTOK</th>
                   <th className="px-5 py-3 text-right text-[10px] font-mono tracking-widest text-slate-500">TOTAL</th>
+                  <th className="px-5 py-3 text-right text-[10px] font-mono tracking-widest text-slate-500">24H GROWTH</th>
                 </tr>
               </thead>
               <tbody>
@@ -476,6 +449,18 @@ export default async function SocialIntelligencePage() {
                         {comp.totalAudience !== null
                           ? <span className={`font-bold ${isHustle ? 'text-indigo-300' : rank === 1 ? 'text-yellow-400' : 'text-white'}`}>{comp.totalAudience.toLocaleString()}</span>
                           : <span className="text-slate-600 text-xs">Data unavailable</span>}
+                      </td>
+                      {/* 24h Growth */}
+                      <td className="px-5 py-3.5 text-right font-mono text-sm">
+                        {comp.growth24h === null
+                          ? <span className="text-slate-700">N/A</span>
+                          : comp.growth24h === 0
+                            ? <span className="text-slate-400">— 0%</span>
+                            : (() => {
+                                const up = comp.growth24h > 0
+                                const pct = comp.growthPct
+                                return <span className={up ? 'text-green-400' : 'text-red-400'}>{up ? '\u25B2 +' : '\u25BC '}{comp.growth24h.toLocaleString()}{pct !== null ? ` (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)` : ''}</span>
+                              })()}
                       </td>
                     </tr>
                   )
@@ -657,7 +642,7 @@ export default async function SocialIntelligencePage() {
                     value: `${hustleIntel.courseCatalogSize}`,
                     sub: 'courses on SkillsFuture',
                     good: false,
-                    note: `ASK leads with 99 courses`,
+                    note: marketCourseLeader ? `Leader: ${marketCourseLeader.name}` : '—',
                   },
                   {
                     label: 'Content Library',
