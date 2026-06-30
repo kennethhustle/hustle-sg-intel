@@ -1,5 +1,8 @@
 /**
- * Performance Intelligence — CEO & Growth Team Dashboard
+ * Marketing Intelligence — CEO & Growth Team Dashboard
+ *
+ * DATA SOURCE: competitors table (Supabase) — fully DB-driven.
+ * Add/edit competitors via /settings/competitors — no code changes needed.
  *
  * Answers 5 strategic questions:
  * 1. Which competitors are investing the most?
@@ -7,23 +10,15 @@
  * 3. Which channels are competitors prioritising?
  * 4. Is Hustle under-investing?
  * 5. Which competitors should we monitor?
- *
- * Data sources (last refreshed: 2026-06-22):
- * - Meta Ads: Meta Ad Library API (live counts)
- * - Google Reviews/Ratings: Google Maps (verified 2026-06-22)
- * - Google Ads: Estimated from Google Ads Transparency
- * - SF Runs & Respondents: Supabase sf_courses table (live)
  */
 
 import type { ReactNode } from 'react'
 import { AppLayout } from '@/components/layout/app-layout'
+import { createServiceClient } from '@/lib/supabase/server'
 
 export const revalidate = 300
 
-// ─── Competitor dataset ───────────────────────────────────────────────────────
-// Meta Ads: real counts from Meta Ad Library API (2026-06-22)
-// Google Reviews/Ads: from Google Business Profile + Ads Transparency
-// SF data: from Supabase sf_courses
+// ─── Types ────────────────────────────────────────────────────────────────────
 type ThreatLevel = 'VERY HIGH' | 'HIGH' | 'MEDIUM' | 'LOW'
 
 interface Competitor {
@@ -36,12 +31,10 @@ interface Competitor {
   googleReviews: number
   sfRuns: number
   sfRespondents: number
-  // Source links
   reviewUrl: string
   metaAdsUrl: string
   googleAdsUrl: string
   sfUrl: string
-  // Computed
   threatScore?: number
   threatLevel?: ThreatLevel
   metaRank?: number
@@ -49,96 +42,62 @@ interface Competitor {
   googleAdsRank?: number
 }
 
-const RAW_DATA: Competitor[] = [
-  {
-    name: 'ASK Training', color: '#ef4444',
-    metaAds: 149, googleAds: 400, googleRating: 4.8, googleReviews: 1478, sfRuns: 43, sfRespondents: 23419,
-    reviewUrl:    'https://www.google.com/maps/search/ASK+Training+Singapore',
-    metaAdsUrl:   'https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=SG&q=ASK+Training&search_type=keyword_unordered',
-    googleAdsUrl: 'https://adstransparency.google.com/?region=SG&q=ASK+Training',
-    sfUrl:        'https://www.myskillsfuture.gov.sg/content/portal/en/training-exchange/course-directory.html?ftsquery=ASK+Training',
-  },
-  {
-    name: 'BELLS Institute', color: '#f97316',
-    metaAds: 149, googleAds: 200, googleRating: 4.9, googleReviews: 4200, sfRuns: 109, sfRespondents: 100257,
-    reviewUrl:    'https://www.google.com/maps/search/BELLS+Institute+Singapore',
-    metaAdsUrl:   'https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=SG&q=BELLS+Institute&search_type=keyword_unordered',
-    googleAdsUrl: 'https://adstransparency.google.com/?region=SG&q=BELLS+Institute',
-    sfUrl:        'https://www.myskillsfuture.gov.sg/content/portal/en/training-exchange/course-directory.html?ftsquery=BELLS+Institute',
-  },
-  {
-    name: 'Hustle SG', color: '#6366f1', isHustle: true,
-    metaAds: 80, googleAds: 35, googleRating: 4.8, googleReviews: 391, sfRuns: 65, sfRespondents: 2653,
-    reviewUrl:    'https://www.google.com/maps/search/Hustle+digital+marketing+training+Singapore',
-    metaAdsUrl:   'https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=ALL&is_targeted_country=false&media_type=all&search_type=page&view_all_page_id=101842442237977',
-    googleAdsUrl: 'https://adstransparency.google.com/?region=SG&q=Hustle+SG',
-    sfUrl:        'https://www.myskillsfuture.gov.sg/content/portal/en/training-exchange/course-directory.html?ftsquery=Hustle',
-  },
-  {
-    name: 'Info-Tech Academy', color: '#06b6d4',
-    metaAds: 50, googleAds: 80, googleRating: 4.9, googleReviews: 5163, sfRuns: 91, sfRespondents: 10401,
-    reviewUrl:    'https://www.google.com/maps/search/Info-Tech+Learning+Centre+Singapore',
-    metaAdsUrl:   'https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=SG&q=Info-Tech+Academy&search_type=keyword_unordered',
-    googleAdsUrl: 'https://adstransparency.google.com/?region=SG&q=Info-Tech+Academy',
-    sfUrl:        'https://www.myskillsfuture.gov.sg/content/portal/en/training-exchange/course-directory.html?ftsquery=Info-Tech',
-  },
-  {
-    name: 'Vertical Institute', color: '#f59e0b',
-    metaAds: 49, googleAds: 61, googleRating: 5.0, googleReviews: 8188, sfRuns: 23, sfRespondents: 6057,
-    reviewUrl:    'https://www.google.com/maps/search/Vertical+Institute+Singapore',
-    metaAdsUrl:   'https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=SG&q=Vertical+Institute&search_type=keyword_unordered',
-    googleAdsUrl: 'https://adstransparency.google.com/?region=SG&q=Vertical+Institute',
-    sfUrl:        'https://www.myskillsfuture.gov.sg/content/portal/en/training-exchange/course-directory.html?ftsquery=Vertical+Institute',
-  },
-  {
-    name: 'Happy Together', color: '#10b981',
-    metaAds: 43, googleAds: 25, googleRating: 4.7, googleReviews: 180, sfRuns: 4, sfRespondents: 1950,
-    reviewUrl:    'https://www.google.com/maps/search/Happy+Together+training+Singapore',
-    metaAdsUrl:   'https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=SG&q=Happy+Together&search_type=keyword_unordered',
-    googleAdsUrl: 'https://adstransparency.google.com/?region=SG&q=Happy+Together',
-    sfUrl:        'https://www.myskillsfuture.gov.sg/content/portal/en/training-exchange/course-directory.html?ftsquery=Happy+Together',
-  },
-  {
-    name: 'Equinet Academy', color: '#14b8a6',
-    metaAds: 39, googleAds: 120, googleRating: 4.9, googleReviews: 151, sfRuns: 17, sfRespondents: 3668,
-    reviewUrl:    'https://www.google.com/maps/search/Equinet+Academy+Singapore',
-    metaAdsUrl:   'https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=SG&q=Equinet+Academy&search_type=keyword_unordered',
-    googleAdsUrl: 'https://adstransparency.google.com/?region=SG&q=Equinet+Academy',
-    sfUrl:        'https://www.myskillsfuture.gov.sg/content/portal/en/training-exchange/course-directory.html?ftsquery=Equinet',
-  },
-  {
-    name: 'OOm Pte Ltd', color: '#8b5cf6',
-    metaAds: 11, googleAds: 30, googleRating: 4.8, googleReviews: 306, sfRuns: 31, sfRespondents: 9796,
-    reviewUrl:    'https://www.google.com/maps/place/OOm+Pte+Ltd/@1.3014488,103.8372499,17z',
-    metaAdsUrl:   'https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=SG&is_targeted_country=false&media_type=all&search_type=page&view_all_page_id=59400547335',
-    googleAdsUrl: 'https://adstransparency.google.com/?region=SG&q=OOm+Pte+Ltd',
-    sfUrl:        'https://www.myskillsfuture.gov.sg/content/portal/en/training-exchange/course-directory.html?ftsquery=OOm',
-  },
-  {
-    name: 'Skills Dev Academy', color: '#3b82f6',
-    metaAds: 4, googleAds: 50, googleRating: 4.5, googleReviews: 15891, sfRuns: 16, sfRespondents: 98486,
-    reviewUrl:    'https://www.google.com/search?q=Skills+Development+Academy+Singapore+reviews',
-    metaAdsUrl:   'https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=SG&q=Skills+Development+Academy&search_type=keyword_unordered',
-    googleAdsUrl: 'https://adstransparency.google.com/?region=SG&q=Skills+Development+Academy',
-    sfUrl:        'https://www.myskillsfuture.gov.sg/content/portal/en/training-exchange/course-directory.html?ftsquery=Skills+Development+Academy',
-  },
-  {
-    name: 'Heicoders Academy', color: '#ec4899',
-    metaAds: 54, googleAds: 40, googleRating: 4.9, googleReviews: 3569, sfRuns: 31, sfRespondents: 2242,
-    reviewUrl:    'https://www.google.com/maps/search/Heicoders+Academy+Singapore',
-    metaAdsUrl:   'https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=SG&is_targeted_country=false&media_type=all&search_type=page&view_all_page_id=103687161401464',
-    googleAdsUrl: 'https://adstransparency.google.com/?region=SG&q=Heicoders+Academy',
-    sfUrl:        'https://www.myskillsfuture.gov.sg/content/portal/en/training-exchange/course-directory.html?ftsquery=Heicoders',
-  },
-]
+// ─── Data layer ───────────────────────────────────────────────────────────────
+async function getData(): Promise<Competitor[]> {
+  const supabase = await createServiceClient()
+
+  const [compRes, sfRes] = await Promise.all([
+    supabase
+      .from('competitors')
+      .select('name, color, is_hustle, meta_ads_count, google_ads_est, google_rating, google_review_count, review_url, meta_ads_page, google_ads_domain, myskillsfuture_provider_name')
+      .eq('active', true)
+      .order('display_order', { ascending: true }),
+    supabase
+      .from('sf_courses')
+      .select('provider_name, upcoming_run_count, respondent_count'),
+  ])
+
+  const rows     = compRes.data ?? []
+  const sfCourses = sfRes.data ?? []
+
+  // Aggregate SF data per provider name
+  const sfMap = new Map<string, { runs: number; respondents: number }>()
+  for (const c of sfCourses) {
+    const existing = sfMap.get(c.provider_name) ?? { runs: 0, respondents: 0 }
+    sfMap.set(c.provider_name, {
+      runs:        existing.runs        + (c.upcoming_run_count ?? 0),
+      respondents: existing.respondents + (c.respondent_count   ?? 0),
+    })
+  }
+
+  return rows.map(c => {
+    const sf = sfMap.get(c.myskillsfuture_provider_name ?? '') ?? { runs: 0, respondents: 0 }
+    return {
+      name:          c.name,
+      color:         c.color ?? '#6366f1',
+      isHustle:      c.is_hustle ?? false,
+      metaAds:       c.meta_ads_count       ?? 0,
+      googleAds:     c.google_ads_est       ?? 0,
+      googleRating:  Number(c.google_rating ?? 0),
+      googleReviews: c.google_review_count  ?? 0,
+      sfRuns:        sf.runs,
+      sfRespondents: sf.respondents,
+      reviewUrl:     c.review_url   ?? `https://www.google.com/maps/search/${encodeURIComponent(c.name)}`,
+      metaAdsUrl:    c.meta_ads_page ?? `https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=SG&q=${encodeURIComponent(c.name)}&search_type=keyword_unordered`,
+      googleAdsUrl:  `https://adstransparency.google.com/?region=SG&q=${encodeURIComponent(c.google_ads_domain ?? c.name)}`,
+      sfUrl:         `https://www.myskillsfuture.gov.sg/content/portal/en/training-exchange/course-directory.html?ftsquery=${encodeURIComponent(c.myskillsfuture_provider_name ?? c.name)}`,
+    } satisfies Competitor
+  })
+}
 
 // ─── Threat Score engine ──────────────────────────────────────────────────────
 function computeScores(data: Competitor[]): Competitor[] {
-  const maxReviews     = Math.max(...data.map(c => c.googleReviews))
-  const maxGoogleAds   = Math.max(...data.map(c => c.googleAds))
-  const maxMetaAds     = Math.max(...data.map(c => c.metaAds))
-  const maxRespondents = Math.max(...data.map(c => c.sfRespondents))
-  const maxRuns        = Math.max(...data.map(c => c.sfRuns))
+  if (!data.length) return data
+  const maxReviews     = Math.max(...data.map(c => c.googleReviews), 1)
+  const maxGoogleAds   = Math.max(...data.map(c => c.googleAds),     1)
+  const maxMetaAds     = Math.max(...data.map(c => c.metaAds),       1)
+  const maxRespondents = Math.max(...data.map(c => c.sfRespondents),  1)
+  const maxRuns        = Math.max(...data.map(c => c.sfRuns),         1)
 
   const scored = data.map(c => {
     const score =
@@ -156,7 +115,6 @@ function computeScores(data: Competitor[]): Competitor[] {
     return { ...c, threatScore: Math.round(score * 10) / 10, threatLevel }
   })
 
-  // Assign ranks
   const byMeta      = [...scored].sort((a, b) => b.metaAds - a.metaAds)
   const byReviews   = [...scored].sort((a, b) => b.googleReviews - a.googleReviews)
   const byGoogleAds = [...scored].sort((a, b) => b.googleAds - a.googleAds)
@@ -169,26 +127,12 @@ function computeScores(data: Competitor[]): Competitor[] {
   }))
 }
 
-const COMPETITORS = computeScores(RAW_DATA)
-
-// ─── Derived leaders ──────────────────────────────────────────────────────────
-const sorted_threat     = [...COMPETITORS].sort((a, b) => (b.threatScore ?? 0) - (a.threatScore ?? 0))
-const sorted_meta       = [...COMPETITORS].sort((a, b) => b.metaAds - a.metaAds)
-const sorted_reviews    = [...COMPETITORS].sort((a, b) => b.googleReviews - a.googleReviews)
-const sorted_googleAds  = [...COMPETITORS].sort((a, b) => b.googleAds - a.googleAds)
-
-const topMetaBuyer    = sorted_meta[0]
-const topGoogleAds    = sorted_googleAds[0]
-const topReviews      = sorted_reviews[0]
-const hustle          = COMPETITORS.find(c => c.isHustle)!
-const hustleThreatRank = sorted_threat.findIndex(c => c.isHustle) + 1
-
-// ─── Threat badge ─────────────────────────────────────────────────────────────
+// ─── Threat badge styles ──────────────────────────────────────────────────────
 const THREAT_STYLE: Record<ThreatLevel, { badge: string; bar: string; dot: string }> = {
-  'VERY HIGH': { badge: 'bg-red-950/70 text-red-400 border-red-800/60',    bar: 'bg-red-500',    dot: 'bg-red-500'    },
-  'HIGH':      { badge: 'bg-orange-950/60 text-orange-400 border-orange-800/60', bar: 'bg-orange-500', dot: 'bg-orange-500' },
-  'MEDIUM':    { badge: 'bg-yellow-950/50 text-yellow-400 border-yellow-800/50', bar: 'bg-yellow-500', dot: 'bg-yellow-500' },
-  'LOW':       { badge: 'bg-slate-800 text-slate-400 border-slate-700',    bar: 'bg-slate-500',  dot: 'bg-slate-500'  },
+  'VERY HIGH': { badge: 'bg-red-950/70 text-red-400 border-red-800/60',               bar: 'bg-red-500',    dot: 'bg-red-500'    },
+  'HIGH':      { badge: 'bg-orange-950/60 text-orange-400 border-orange-800/60',       bar: 'bg-orange-500', dot: 'bg-orange-500' },
+  'MEDIUM':    { badge: 'bg-yellow-950/50 text-yellow-400 border-yellow-800/50',       bar: 'bg-yellow-500', dot: 'bg-yellow-500' },
+  'LOW':       { badge: 'bg-slate-800 text-slate-400 border-slate-700',               bar: 'bg-slate-500',  dot: 'bg-slate-500'  },
 }
 
 // ─── UI helpers ───────────────────────────────────────────────────────────────
@@ -220,36 +164,89 @@ function ThreatBadge({ level }: { level: ThreatLevel }) {
 }
 
 // ─── Recommendation engine ────────────────────────────────────────────────────
-function buildRecommendation(h: Competitor): string[] {
+function buildRecommendation(h: Competitor, COMPETITORS: Competitor[]): string[] {
   const recs: string[] = []
-  if ((h.reviewRank ?? 10) > 5)   recs.push(`Google Reviews rank #${h.reviewRank} — run a post-course review campaign to move into top 5.`)
-  if ((h.googleAdsRank ?? 10) > 5) recs.push(`Google Ads rank #${h.googleAdsRank} — increase Google search ad spend; ASK Training outspends by ${topGoogleAds.googleAds - h.googleAds} ads.`)
-  if ((h.metaRank ?? 10) > 3)     recs.push(`Meta Ads rank #${h.metaRank} — at ${h.metaAds} active ads, there is room to increase social ad volume.`)
-  recs.push(`Maintain ${h.sfRuns} upcoming SF runs to stay top 3 in market capacity.`)
+  const sorted_meta       = [...COMPETITORS].sort((a, b) => b.metaAds - a.metaAds)
+  const sorted_reviews    = [...COMPETITORS].sort((a, b) => b.googleReviews - a.googleReviews)
+  const sorted_googleAds  = [...COMPETITORS].sort((a, b) => b.googleAds - a.googleAds)
+  if ((h.reviewRank ?? 10) > 5)
+    recs.push(`Google Reviews rank #${h.reviewRank} — run a post-course review campaign to move into top 5.`)
+  if ((h.googleAdsRank ?? 10) > 5)
+    recs.push(`Google Ads rank #${h.googleAdsRank} — increase Google search ad spend; ${sorted_googleAds[0].name} outspends by ${sorted_googleAds[0].googleAds - h.googleAds} ads.`)
+  if ((h.metaRank ?? 10) > 3)
+    recs.push(`Meta Ads rank #${h.metaRank} — at ${h.metaAds} active ads, there is room to increase social ad volume.`)
+  if (sorted_reviews[0] && h.googleReviews < sorted_reviews[0].googleReviews)
+    recs.push(`Maintain ${h.sfRuns} upcoming SF runs to stay competitive in market capacity.`)
   return recs.slice(0, 2)
 }
 
-const RECOMMENDATIONS = buildRecommendation(hustle)
-
-// ─── Alerts (seeded from real competitive signals) ───────────────────────────
-const ALERTS = [
-  { severity: 'critical', text: "Skills Dev Academy has 15,891 Google reviews — 40× Hustle's 391.", sub: 'Dominant social proof. Hustle needs an urgent, sustained review campaign to close this gap.' },
-  { severity: 'critical', text: 'ASK Training + BELLS each running 149 active Meta ads — highest in market.', sub: 'Both focus: AI-Powered Marketing, Finance, HR, Supply Chain training.' },
-  { severity: 'critical', text: 'BELLS Institute has 109 upcoming SF course runs — most scheduled capacity in market.', sub: 'Dominant across both paid demand and SkillsFuture scheduling. Students find BELLS first.' },
-  { severity: 'high',     text: "ASK Training estimated ~400 active Google ads — 11× Hustle's ~35.", sub: 'Capturing high-intent search traffic across all training categories.' },
-  { severity: 'high',     text: 'Heicoders Academy running 54 active Meta ads — surprise entrant to top-5 Meta spenders.', sub: 'Previously not visible in Meta; now competing head-on in paid social with 3,569 Google reviews.' },
-  { severity: 'medium',   text: "Info-Tech Academy has 5,163 Google reviews (4.9★) — #2 in market for social proof.", sub: 'Hustle trails by 4,772 reviews. Review volume directly influences SkillsFuture course trust.' },
-]
-
 // ─────────────────────────────────────────────────────────────────────────────
-export default function PerformanceIntelligencePage() {
-  const tableRows = sorted_threat.filter(c => !c.isHustle)
-  const maxMeta    = sorted_meta[0].metaAds
-  const maxGAds    = sorted_googleAds[0].googleAds
-  const maxRev     = sorted_reviews[0].googleReviews
+export default async function PerformanceIntelligencePage() {
+  const rawData    = await getData()
+  const COMPETITORS = computeScores(rawData)
+
+  if (!COMPETITORS.length) {
+    return (
+      <AppLayout title="Marketing Intelligence">
+        <div className="flex items-center justify-center h-64 text-slate-500 font-mono text-sm">
+          No competitor data available.
+        </div>
+      </AppLayout>
+    )
+  }
+
+  const sorted_threat    = [...COMPETITORS].sort((a, b) => (b.threatScore ?? 0) - (a.threatScore ?? 0))
+  const sorted_meta      = [...COMPETITORS].sort((a, b) => b.metaAds - a.metaAds)
+  const sorted_reviews   = [...COMPETITORS].sort((a, b) => b.googleReviews - a.googleReviews)
+  const sorted_googleAds = [...COMPETITORS].sort((a, b) => b.googleAds - a.googleAds)
+  const sorted_sfRuns    = [...COMPETITORS].sort((a, b) => b.sfRuns - a.sfRuns)
+
+  const topMetaBuyer  = sorted_meta[0]
+  const topGoogleAds  = sorted_googleAds[0]
+  const topReviews    = sorted_reviews[0]
+  const hustle        = COMPETITORS.find(c => c.isHustle) ?? COMPETITORS[0]
+  const hustleThreatRank = sorted_threat.findIndex(c => c.isHustle) + 1
+
+  const RECOMMENDATIONS = buildRecommendation(hustle, COMPETITORS)
+  const tableRows = sorted_threat
+  const maxMeta  = sorted_meta[0].metaAds
+  const maxGAds  = sorted_googleAds[0].googleAds
+  const maxRev   = sorted_reviews[0].googleReviews
+
+  // Dynamic alerts from live DB data
+  const ALERTS = [
+    sorted_reviews[0].googleReviews > (hustle.googleReviews * 5) && {
+      severity: 'critical',
+      text: `${sorted_reviews[0].name} has ${sorted_reviews[0].googleReviews.toLocaleString()} Google reviews — ${Math.round(sorted_reviews[0].googleReviews / Math.max(hustle.googleReviews, 1))}× Hustle's ${hustle.googleReviews.toLocaleString()}.`,
+      sub: 'Dominant social proof. Hustle needs an urgent, sustained review campaign to close this gap.',
+    },
+    sorted_meta[0].metaAds >= 100 && {
+      severity: 'critical',
+      text: `${sorted_meta[0].name} running ${sorted_meta[0].metaAds} active Meta ads — highest in market.`,
+      sub: 'Heavy investment in paid social; likely targeting multiple training categories simultaneously.',
+    },
+    sorted_sfRuns[0].sfRuns > 50 && {
+      severity: 'critical',
+      text: `${sorted_sfRuns[0].name} has ${sorted_sfRuns[0].sfRuns} upcoming SF course runs — most scheduled capacity in market.`,
+      sub: 'Dominant across both paid demand and SkillsFuture scheduling. Students find them first.',
+    },
+    sorted_googleAds[0].googleAds > (hustle.googleAds * 5) && {
+      severity: 'high',
+      text: `${sorted_googleAds[0].name} estimated ~${sorted_googleAds[0].googleAds} active Google ads — ${Math.round(sorted_googleAds[0].googleAds / Math.max(hustle.googleAds, 1))}× Hustle's ~${hustle.googleAds}.`,
+      sub: 'Capturing high-intent search traffic across all training categories.',
+    },
+    sorted_reviews.slice(1, 3).find(c => !c.isHustle && c.googleReviews > 3000) && (() => {
+      const c = sorted_reviews.slice(1, 3).find(cc => !cc.isHustle && cc.googleReviews > 3000)!
+      return {
+        severity: 'high',
+        text: `${c.name} has ${c.googleReviews.toLocaleString()} Google reviews (${c.googleRating}★).`,
+        sub: 'Strong social proof presence. Review volume directly influences SkillsFuture course trust.',
+      }
+    })(),
+  ].filter(Boolean) as { severity: string; text: string; sub: string }[]
 
   return (
-    <AppLayout>
+    <AppLayout title="Marketing Intelligence">
       <div className="min-h-screen bg-slate-950 text-white p-6 space-y-6">
 
         {/* Page header */}
@@ -257,21 +254,17 @@ export default function PerformanceIntelligencePage() {
           <div>
             <h1 className="text-xl font-black tracking-tight text-white">Marketing Intelligence</h1>
             <p className="text-xs text-slate-500 mt-0.5">
-              Who is buying demand · Google presence · Meta advertising · Last updated 22 Jun 2026
+              Who is buying demand · Google presence · Meta advertising · DB-driven · {COMPETITORS.length} competitors tracked
             </p>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-950/50 border border-emerald-800/50 text-[11px] text-emerald-400 font-medium">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              Live Data
-            </span>
-          </div>
+          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-950/50 border border-emerald-800/50 text-[11px] text-emerald-400 font-medium">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            Live Data
+          </span>
         </div>
 
         {/* ── KPI Cards ── */}
         <div className="grid grid-cols-4 gap-4">
-
-          {/* Card 1: Top Meta Ad Buyer */}
           <Section>
             <p className="text-[10px] font-bold tracking-widest text-red-400 uppercase mb-3">Top Meta Ad Buyer</p>
             <div className="flex items-center gap-2 mb-1">
@@ -285,7 +278,6 @@ export default function PerformanceIntelligencePage() {
             </div>
           </Section>
 
-          {/* Card 2: Top Google Advertiser */}
           <Section>
             <p className="text-[10px] font-bold tracking-widest text-blue-400 uppercase mb-3">Top Google Advertiser</p>
             <div className="flex items-center gap-2 mb-1">
@@ -299,7 +291,6 @@ export default function PerformanceIntelligencePage() {
             </div>
           </Section>
 
-          {/* Card 3: Top Google Reviews */}
           <Section>
             <p className="text-[10px] font-bold tracking-widest text-yellow-400 uppercase mb-3">Top Google Reviews</p>
             <div className="flex items-center gap-2 mb-1">
@@ -313,7 +304,6 @@ export default function PerformanceIntelligencePage() {
             </div>
           </Section>
 
-          {/* Card 4: Hustle Position */}
           <Section className="border-indigo-800/50 bg-indigo-950/20">
             <p className="text-[10px] font-bold tracking-widest text-indigo-400 uppercase mb-3">Hustle Position</p>
             <p className="text-3xl font-black text-indigo-400 mb-1">#{hustleThreatRank}</p>
@@ -321,15 +311,15 @@ export default function PerformanceIntelligencePage() {
             <div className="space-y-1.5 text-[11px]">
               <div className="flex justify-between">
                 <span className="text-slate-500">Meta Ads</span>
-                <span className="text-white font-bold">#{hustle.metaRank} of 10</span>
+                <span className="text-white font-bold">#{hustle.metaRank} of {COMPETITORS.length}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-500">Google Ads</span>
-                <span className="text-white font-bold">#{hustle.googleAdsRank} of 10</span>
+                <span className="text-white font-bold">#{hustle.googleAdsRank} of {COMPETITORS.length}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-500">Google Reviews</span>
-                <span className="text-orange-400 font-bold">#{hustle.reviewRank} of 10</span>
+                <span className="text-orange-400 font-bold">#{hustle.reviewRank} of {COMPETITORS.length}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-500">Threat Level</span>
@@ -341,7 +331,7 @@ export default function PerformanceIntelligencePage() {
 
         {/* ── Main Competitor Table ── */}
         <Section>
-          <H2 sub="Ranked by threat score. Includes all 10 tracked competitors.">
+          <H2 sub={`Ranked by threat score. ${COMPETITORS.length} competitors tracked.`}>
             Competitor Performance Table
           </H2>
           <div className="overflow-x-auto">
@@ -357,7 +347,7 @@ export default function PerformanceIntelligencePage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/60">
-                {sorted_threat.map((c, i) => {
+                {tableRows.map((c, i) => {
                   const ts = THREAT_STYLE[c.threatLevel!]
                   return (
                     <tr
@@ -383,17 +373,10 @@ export default function PerformanceIntelligencePage() {
                       <td className="py-3 px-4 text-right">
                         <div className="flex items-center justify-end gap-2">
                           <div className="w-16 bg-slate-800 rounded-full h-1 overflow-hidden">
-                            <div
-                              className="h-full bg-yellow-500 rounded-full"
-                              style={{ width: `${(c.googleReviews / maxRev) * 100}%` }}
-                            />
+                            <div className="h-full bg-yellow-500 rounded-full" style={{ width: `${(c.googleReviews / maxRev) * 100}%` }} />
                           </div>
-                          <a
-                            href={c.reviewUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-white hover:text-yellow-400 font-mono text-xs w-14 text-right transition-colors underline decoration-slate-700 hover:decoration-yellow-400"
-                          >
+                          <a href={c.reviewUrl} target="_blank" rel="noopener noreferrer"
+                            className="text-white hover:text-yellow-400 font-mono text-xs w-14 text-right transition-colors underline decoration-slate-700 hover:decoration-yellow-400">
                             {c.googleReviews.toLocaleString()}
                           </a>
                         </div>
@@ -401,17 +384,10 @@ export default function PerformanceIntelligencePage() {
                       <td className="py-3 px-4 text-right">
                         <div className="flex items-center justify-end gap-2">
                           <div className="w-16 bg-slate-800 rounded-full h-1 overflow-hidden">
-                            <div
-                              className="h-full bg-blue-500 rounded-full"
-                              style={{ width: `${(c.googleAds / maxGAds) * 100}%` }}
-                            />
+                            <div className="h-full bg-blue-500 rounded-full" style={{ width: `${(c.googleAds / maxGAds) * 100}%` }} />
                           </div>
-                          <a
-                            href={c.googleAdsUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-slate-300 hover:text-blue-400 font-mono text-xs w-10 text-right transition-colors underline decoration-slate-700 hover:decoration-blue-400"
-                          >
+                          <a href={c.googleAdsUrl} target="_blank" rel="noopener noreferrer"
+                            className="text-slate-300 hover:text-blue-400 font-mono text-xs w-10 text-right transition-colors underline decoration-slate-700 hover:decoration-blue-400">
                             ~{c.googleAds}
                           </a>
                         </div>
@@ -419,17 +395,10 @@ export default function PerformanceIntelligencePage() {
                       <td className="py-3 px-4 text-right">
                         <div className="flex items-center justify-end gap-2">
                           <div className="w-16 bg-slate-800 rounded-full h-1 overflow-hidden">
-                            <div
-                              className="h-full bg-red-500 rounded-full"
-                              style={{ width: `${(c.metaAds / maxMeta) * 100}%` }}
-                            />
+                            <div className="h-full bg-red-500 rounded-full" style={{ width: `${(c.metaAds / maxMeta) * 100}%` }} />
                           </div>
-                          <a
-                            href={c.metaAdsUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-slate-300 hover:text-red-400 font-mono text-xs w-8 text-right transition-colors underline decoration-slate-700 hover:decoration-red-400"
-                          >
+                          <a href={c.metaAdsUrl} target="_blank" rel="noopener noreferrer"
+                            className="text-slate-300 hover:text-red-400 font-mono text-xs w-8 text-right transition-colors underline decoration-slate-700 hover:decoration-red-400">
                             {c.metaAds}
                           </a>
                         </div>
@@ -445,48 +414,42 @@ export default function PerformanceIntelligencePage() {
           </div>
           <p className="text-[10px] text-slate-600 mt-3">
             Threat Score = Google Reviews 20% · Google Ads 25% · Meta Ads 25% · SF Attendees 20% · SF Runs 10%
-            &nbsp;·&nbsp; Google Ads estimated via Google Ads Transparency · Meta Ads live from Meta Ad Library API · Click any number to view source
+            &nbsp;·&nbsp; Google Ads estimated via Google Ads Transparency · Meta Ads from DB (update via /settings/competitors) · Click any number to view source
           </p>
         </Section>
 
         {/* ── Market Leaders + Hustle vs Market ── */}
         <div className="grid grid-cols-2 gap-4">
-
-          {/* Market Leaders */}
           <Section>
             <H2 sub="Top performer in each channel">Market Leaders</H2>
             <div className="space-y-4">
               {[
                 {
-                  icon: '🏆',
-                  label: 'Most Google Reviews',
+                  icon: '🏆', label: 'Most Google Reviews',
                   winner: sorted_reviews[0],
                   value: sorted_reviews[0].googleReviews.toLocaleString(),
-                  sub: `${sorted_reviews[0].googleRating} ★ · ${sorted_reviews[1].name} trails by ${(sorted_reviews[0].googleReviews - sorted_reviews[1].googleReviews).toLocaleString()}`,
+                  sub: `${sorted_reviews[0].googleRating} ★ · ${sorted_reviews[1]?.name ?? ''} trails by ${((sorted_reviews[0].googleReviews - (sorted_reviews[1]?.googleReviews ?? 0))).toLocaleString()}`,
                   color: 'text-yellow-400',
                 },
                 {
-                  icon: '🏆',
-                  label: 'Most Meta Ads',
+                  icon: '🏆', label: 'Most Meta Ads',
                   winner: sorted_meta[0],
                   value: `${sorted_meta[0].metaAds} ads`,
-                  sub: `Tied with ${sorted_meta[1].name} · Both running ${sorted_meta[1].metaAds} active ads`,
+                  sub: sorted_meta[1] ? `#2 ${sorted_meta[1].name} running ${sorted_meta[1].metaAds} ads` : '',
                   color: 'text-red-400',
                 },
                 {
-                  icon: '🏆',
-                  label: 'Most Google Ads',
+                  icon: '🏆', label: 'Most Google Ads',
                   winner: sorted_googleAds[0],
                   value: `~${sorted_googleAds[0].googleAds} ads`,
-                  sub: `2× more than #2 ${sorted_googleAds[1].name} (~${sorted_googleAds[1].googleAds})`,
+                  sub: sorted_googleAds[1] ? `#2 ${sorted_googleAds[1].name} (~${sorted_googleAds[1].googleAds})` : '',
                   color: 'text-blue-400',
                 },
                 {
-                  icon: '🏆',
-                  label: 'Most SF Course Runs',
-                  winner: [...COMPETITORS].sort((a, b) => b.sfRuns - a.sfRuns)[0],
-                  value: `${[...COMPETITORS].sort((a, b) => b.sfRuns - a.sfRuns)[0].sfRuns} runs`,
-                  sub: `Dominates SkillsFuture scheduling availability`,
+                  icon: '🏆', label: 'Most SF Course Runs',
+                  winner: sorted_sfRuns[0],
+                  value: `${sorted_sfRuns[0].sfRuns} runs`,
+                  sub: 'Dominates SkillsFuture scheduling availability',
                   color: 'text-orange-400',
                 },
               ].map(item => (
@@ -499,111 +462,87 @@ export default function PerformanceIntelligencePage() {
                       <span className="text-white font-bold text-sm">{item.winner.name}</span>
                       <span className={`font-mono font-black text-sm ${item.color}`}>{item.value}</span>
                     </div>
-                    <p className="text-[11px] text-slate-500 mt-0.5">{item.sub}</p>
+                    {item.sub && <p className="text-[11px] text-slate-500 mt-0.5">{item.sub}</p>}
                   </div>
                 </div>
               ))}
             </div>
           </Section>
 
-          {/* Hustle vs Market */}
           <Section className="border-indigo-800/40 bg-indigo-950/10">
             <H2 sub="Where Hustle stands — and what to do">Hustle vs Market</H2>
             <div className="space-y-3 mb-5">
               {[
-                {
-                  label: 'Google Reviews',
-                  hustleVal: `${hustle.googleReviews} reviews`,
-                  rank: hustle.reviewRank!,
-                  leaderVal: `${sorted_reviews[0].name}: ${sorted_reviews[0].googleReviews.toLocaleString()}`,
-                  urgent: hustle.reviewRank! > 5,
-                },
-                {
-                  label: 'Meta Ads',
-                  hustleVal: `${hustle.metaAds} active`,
-                  rank: hustle.metaRank!,
-                  leaderVal: `${sorted_meta[0].name}: ${sorted_meta[0].metaAds}`,
-                  urgent: hustle.metaRank! > 5,
-                },
-                {
-                  label: 'Google Ads',
-                  hustleVal: `~${hustle.googleAds} ads`,
-                  rank: hustle.googleAdsRank!,
-                  leaderVal: `${sorted_googleAds[0].name}: ~${sorted_googleAds[0].googleAds}`,
-                  urgent: hustle.googleAdsRank! > 5,
-                },
-                {
-                  label: 'SF Course Runs',
-                  hustleVal: `${hustle.sfRuns} upcoming`,
-                  rank: [...COMPETITORS].sort((a, b) => b.sfRuns - a.sfRuns).findIndex(c => c.isHustle) + 1,
-                  leaderVal: `${[...COMPETITORS].sort((a, b) => b.sfRuns - a.sfRuns)[0].name}: ${[...COMPETITORS].sort((a, b) => b.sfRuns - a.sfRuns)[0].sfRuns}`,
-                  urgent: false,
-                },
+                { label: 'Google Reviews', hustleVal: `${hustle.googleReviews} reviews`, rank: hustle.reviewRank!, leaderVal: `${sorted_reviews[0].name}: ${sorted_reviews[0].googleReviews.toLocaleString()}`, urgent: hustle.reviewRank! > 5 },
+                { label: 'Meta Ads',       hustleVal: `${hustle.metaAds} active`,         rank: hustle.metaRank!,   leaderVal: `${sorted_meta[0].name}: ${sorted_meta[0].metaAds}`,           urgent: hustle.metaRank! > 5  },
+                { label: 'Google Ads',     hustleVal: `~${hustle.googleAds} ads`,         rank: hustle.googleAdsRank!, leaderVal: `${sorted_googleAds[0].name}: ~${sorted_googleAds[0].googleAds}`, urgent: hustle.googleAdsRank! > 5 },
+                { label: 'SF Course Runs', hustleVal: `${hustle.sfRuns} upcoming`,        rank: sorted_sfRuns.findIndex(c => c.isHustle) + 1, leaderVal: `${sorted_sfRuns[0].name}: ${sorted_sfRuns[0].sfRuns}`, urgent: false },
               ].map(row => (
                 <div key={row.label} className="grid grid-cols-[auto_1fr_auto] gap-3 items-center">
                   <span className="text-slate-500 text-xs w-28 shrink-0">{row.label}</span>
                   <div className="flex items-center gap-2">
-                    <span className={`text-xs font-bold ${row.urgent ? 'text-orange-400' : 'text-white'}`}>
-                      {row.hustleVal}
-                    </span>
+                    <span className={`text-xs font-bold ${row.urgent ? 'text-orange-400' : 'text-white'}`}>{row.hustleVal}</span>
                     <span className="text-[10px] text-slate-600 truncate">vs {row.leaderVal}</span>
                   </div>
                   <Rank n={row.rank} />
                 </div>
               ))}
-
               <div className="pt-3 border-t border-slate-800 flex items-center justify-between">
                 <span className="text-slate-500 text-xs">Overall Threat Level</span>
                 <ThreatBadge level={hustle.threatLevel!} />
               </div>
             </div>
 
-            <div className="bg-slate-800/40 rounded-lg p-3 space-y-2">
-              <p className="text-[10px] font-bold tracking-widest text-indigo-400 uppercase">Recommended Actions</p>
-              {RECOMMENDATIONS.map((r, i) => (
-                <p key={i} className="text-xs text-slate-300 leading-relaxed flex gap-2">
-                  <span className="text-indigo-400 shrink-0 font-bold">{i + 1}.</span>
-                  {r}
-                </p>
-              ))}
-            </div>
+            {RECOMMENDATIONS.length > 0 && (
+              <div className="bg-slate-800/40 rounded-lg p-3 space-y-2">
+                <p className="text-[10px] font-bold tracking-widest text-indigo-400 uppercase">Recommended Actions</p>
+                {RECOMMENDATIONS.map((r, i) => (
+                  <p key={i} className="text-xs text-slate-300 leading-relaxed flex gap-2">
+                    <span className="text-indigo-400 shrink-0 font-bold">{i + 1}.</span>
+                    {r}
+                  </p>
+                ))}
+              </div>
+            )}
           </Section>
         </div>
 
         {/* ── Alerts ── */}
-        <Section>
-          <H2 sub="Signals that require management attention">Growth Alerts</H2>
-          <div className="space-y-2">
-            {ALERTS.map((a, i) => {
-              const styles = {
-                critical: { dot: 'bg-red-500', badge: 'bg-red-950/60 border-red-800/60 text-red-400', label: '🚨 CRITICAL' },
-                high:     { dot: 'bg-orange-500', badge: 'bg-orange-950/50 border-orange-800/50 text-orange-400', label: '⚠️ HIGH' },
-                medium:   { dot: 'bg-yellow-500', badge: 'bg-yellow-950/40 border-yellow-800/40 text-yellow-400', label: '📊 MEDIUM' },
-                low:      { dot: 'bg-slate-500', badge: 'bg-slate-800 border-slate-700 text-slate-400', label: '💡 LOW' },
-              }[a.severity as 'critical' | 'high' | 'medium' | 'low']
+        {ALERTS.length > 0 && (
+          <Section>
+            <H2 sub="Signals that require management attention">Growth Alerts</H2>
+            <div className="space-y-2">
+              {ALERTS.map((a, i) => {
+                const styles = {
+                  critical: { badge: 'bg-red-950/60 border-red-800/60 text-red-400',         label: '🚨 CRITICAL' },
+                  high:     { badge: 'bg-orange-950/50 border-orange-800/50 text-orange-400', label: '⚠️ HIGH'     },
+                  medium:   { badge: 'bg-yellow-950/40 border-yellow-800/40 text-yellow-400', label: '📊 MEDIUM'   },
+                  low:      { badge: 'bg-slate-800 border-slate-700 text-slate-400',          label: '💡 LOW'      },
+                }[a.severity as 'critical' | 'high' | 'medium' | 'low']
 
-              return (
-                <div key={i} className="flex items-start gap-3 p-3 rounded-lg bg-slate-800/30 border border-slate-800/60 hover:bg-slate-800/50 transition-colors">
-                  <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold border ${styles.badge} shrink-0 mt-0.5`}>
-                    {styles.label}
-                  </span>
-                  <div>
-                    <p className="text-sm text-white font-medium leading-snug">{a.text}</p>
-                    <p className="text-xs text-slate-500 mt-0.5">{a.sub}</p>
+                return (
+                  <div key={i} className="flex items-start gap-3 p-3 rounded-lg bg-slate-800/30 border border-slate-800/60 hover:bg-slate-800/50 transition-colors">
+                    <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold border ${styles.badge} shrink-0 mt-0.5`}>
+                      {styles.label}
+                    </span>
+                    <div>
+                      <p className="text-sm text-white font-medium leading-snug">{a.text}</p>
+                      <p className="text-xs text-slate-500 mt-0.5">{a.sub}</p>
+                    </div>
                   </div>
-                </div>
-              )
-            })}
-          </div>
-        </Section>
+                )
+              })}
+            </div>
+          </Section>
+        )}
 
         {/* ── Data sources footer ── */}
         <div className="text-[10px] text-slate-700 flex flex-wrap gap-4 pb-2">
-          <a href="https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=SG" target="_blank" rel="noopener noreferrer" className="hover:text-slate-500 transition-colors">Meta Ads: Meta Ad Library (live)</a>
-          <a href="https://www.google.com/maps" target="_blank" rel="noopener noreferrer" className="hover:text-slate-500 transition-colors">Google Reviews: Google Maps (verified 22 Jun 2026)</a>
-          <a href="https://adstransparency.google.com/?region=SG" target="_blank" rel="noopener noreferrer" className="hover:text-slate-500 transition-colors">Google Ads: Google Ads Transparency (estimated)</a>
-          <a href="https://www.myskillsfuture.gov.sg/content/portal/en/training-exchange/course-directory.html" target="_blank" rel="noopener noreferrer" className="hover:text-slate-500 transition-colors">SF Data: MySkillsFuture via Supabase</a>
-          <span>Updated: 22 Jun 2026</span>
+          <a href="https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=SG" target="_blank" rel="noopener noreferrer" className="hover:text-slate-500 transition-colors">Meta Ads: Meta Ad Library (count stored in DB)</a>
+          <a href="https://www.google.com/maps" target="_blank" rel="noopener noreferrer" className="hover:text-slate-500 transition-colors">Google Reviews: Google Maps (count stored in DB)</a>
+          <a href="https://adstransparency.google.com/?region=SG" target="_blank" rel="noopener noreferrer" className="hover:text-slate-500 transition-colors">Google Ads: Google Ads Transparency (estimated, stored in DB)</a>
+          <a href="https://www.myskillsfuture.gov.sg/content/portal/en/training-exchange/course-directory.html" target="_blank" rel="noopener noreferrer" className="hover:text-slate-500 transition-colors">SF Data: MySkillsFuture via Supabase (live)</a>
+          <a href="/settings/competitors" className="hover:text-indigo-400 transition-colors text-indigo-700">Update data → /settings/competitors</a>
         </div>
 
       </div>

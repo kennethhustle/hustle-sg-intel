@@ -1,34 +1,33 @@
-import { createClient } from '@/lib/supabase/server'
+import { createServiceClient } from '@/lib/supabase/server'
 import { NextResponse } from 'next/server'
 
 export async function GET() {
-  const supabase = await createClient()
-
-  const { data: competitors, error } = await supabase
+  const supabase = await createServiceClient()
+  const { data, error } = await supabase
     .from('competitors')
-    .select(`
-      *,
-      social_profiles (*)
-    `)
-    .eq('active', true)
-    .order('name')
+    .select('*, social_profiles(platform, handle, active)')
+    .order('display_order', { ascending: true })
+    .order('name', { ascending: true })
 
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 })
-  }
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  return NextResponse.json(data)
+}
 
-  // For each competitor, fetch their latest social metrics per platform
-  const competitorsWithMetrics = await Promise.all(
-    (competitors ?? []).map(async (competitor) => {
-      const { data: metrics } = await supabase
-        .rpc('get_latest_social_metrics', { competitor_uuid: competitor.id })
+export async function POST(req: Request) {
+  const supabase = await createServiceClient()
+  const body = await req.json()
 
-      return {
-        ...competitor,
-        latest_metrics: metrics ?? [],
-      }
-    })
-  )
+  const slug = (body.name as string)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
 
-  return NextResponse.json({ data: competitorsWithMetrics })
+  const { data, error } = await supabase
+    .from('competitors')
+    .insert({ ...body, slug, active: true })
+    .select()
+    .single()
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  return NextResponse.json(data, { status: 201 })
 }

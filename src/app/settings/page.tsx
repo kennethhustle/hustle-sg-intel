@@ -1,7 +1,7 @@
 import { AppLayout } from '@/components/layout/app-layout'
 import { createClient } from '@/lib/supabase/server'
 import { formatRelativeTime, getPlatformLabel, cn } from '@/lib/utils'
-import { Clock, Database, Globe, User, Shield } from 'lucide-react'
+import { Clock, Database, Globe, User, Shield, Users, ArrowRight } from 'lucide-react'
 import type { Platform } from '@/lib/types'
 import { ChangePasswordForm } from './change-password-form'
 
@@ -120,6 +120,25 @@ export default async function SettingsPage() {
               </p>
             </div>
           </div>
+        </section>
+
+        {/* Competitor Management */}
+        <section className="bg-slate-900/60 border border-indigo-800/30 rounded-xl p-5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Users className="h-4 w-4 text-indigo-400" />
+              <h2 className="text-sm font-semibold text-white">Competitor Management</h2>
+            </div>
+            <a
+              href="/settings/competitors"
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-400 text-xs font-medium rounded-lg border border-indigo-700/40 transition-colors"
+            >
+              Manage Competitors <ArrowRight className="h-3 w-3" />
+            </a>
+          </div>
+          <p className="text-xs text-slate-500 mt-2">
+            Add, edit and remove competitors. Changes propagate to Social Intel, Ads Intel, MySF Intel, Hiring Intel, and Opportunity Engine instantly — no code changes required.
+          </p>
         </section>
 
         {/* Cron Schedule */}
