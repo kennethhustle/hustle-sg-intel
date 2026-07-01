@@ -15,6 +15,36 @@ function scopeByModule<T extends ModuleQuery>(query: T, isSeo: boolean): T {
     : query.or('metadata->>module.is.null,metadata->>module.neq.seo')) as T
 }
 
+// Map an internal generation/insert error to a safe, user-facing response. The
+// complete original error is always logged server-side; the raw provider
+// message is never sent to the client. Transient Gemini overload (503 /
+// UNAVAILABLE / high demand) becomes AI_BUSY (503); anything else becomes a
+// generic AI_ERROR (500).
+function aiErrorResponse(err: unknown): NextResponse {
+  console.error('Strategic insights generation failed:', err)
+  const message = (err instanceof Error ? err.message : String(err)).toLowerCase()
+  const status = (err as { status?: number } | null)?.status
+  const isBusy =
+    status === 503 ||
+    message.includes('503') ||
+    message.includes('unavailable') ||
+    message.includes('overloaded') ||
+    message.includes('high demand')
+  if (isBusy) {
+    return NextResponse.json(
+      {
+        code: 'AI_BUSY',
+        error: 'Gemini is temporarily busy. Please try regenerating again in a few minutes.',
+      },
+      { status: 503 }
+    )
+  }
+  return NextResponse.json(
+    { code: 'AI_ERROR', error: 'Failed to regenerate insights. Please try again.' },
+    { status: 500 }
+  )
+}
+
 export async function GET(request: NextRequest) {
   const supabase = await createClient()
   const { searchParams } = new URL(request.url)
@@ -263,15 +293,12 @@ export async function POST(request: NextRequest) {
       .select()
 
     if (insertError) {
-      return NextResponse.json({ error: insertError.message }, { status: 500 })
+      return aiErrorResponse(insertError)
     }
 
     return NextResponse.json({ data: inserted, count: inserted?.length ?? 0, session_id: sessionId })
   } catch (err) {
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : String(err) },
-      { status: 500 }
-    )
+    return aiErrorResponse(err)
   }
 }
 
