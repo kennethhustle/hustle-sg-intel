@@ -1,6 +1,10 @@
 {
   "crons": [
     {
+      "path": "/api/cron/marketing-refresh",
+      "schedule": "0 20 * * *"
+    },
+    {
       "path": "/api/cron/social-refresh",
       "schedule": "0 23 * * *"
     },
