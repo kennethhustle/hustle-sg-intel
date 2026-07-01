@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { DataUnavailable } from '@/components/dashboard/data-unavailable'
 import { formatRelativeTime, getSeverityBgClass, cn } from '@/lib/utils'
-import { Zap, RefreshCw, Loader2, History, Search, Clock } from 'lucide-react'
+import { Zap, RefreshCw, Loader2, History, Search, Clock, Trash2 } from 'lucide-react'
 import type { InsightType, AlertSeverity, GenerationSession, InsightMetadata } from '@/lib/types'
 
 interface Insight {
@@ -149,6 +149,7 @@ export function OpportunityEngineClient() {
   const [selectedSession, setSelectedSession] = useState<string | null>(null)
   const [sessionInsights, setSessionInsights] = useState<Insight[]>([])
   const [sessionInsightsLoading, setSessionInsightsLoading] = useState(false)
+  const [deletingSession, setDeletingSession] = useState<string | null>(null)
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [historyType, setHistoryType] = useState<InsightType | 'all'>('all')
@@ -203,6 +204,44 @@ export function OpportunityEngineClient() {
       setSessionInsights([])
     } finally {
       setSessionInsightsLoading(false)
+    }
+  }
+
+  async function deleteSession(session: GenerationSession) {
+    if (
+      !window.confirm(
+        `Delete this generation from ${formatTimestamp(session.generated_at)} and all ${session.insight_count} insights? This cannot be undone.`
+      )
+    ) {
+      return
+    }
+    setDeletingSession(session.session_id)
+    setError(null)
+    try {
+      const res = await fetch(
+        `/api/insights?session=${encodeURIComponent(session.session_id)}`,
+        { method: 'DELETE' }
+      )
+      const data = await res.json()
+      if (!res.ok) {
+        setError(data.error ?? 'Failed to delete history')
+        return
+      }
+      // Refresh the list immediately, then fix up the selection.
+      const remaining = sessions.filter((s) => s.session_id !== session.session_id)
+      setSessions(remaining)
+      if (selectedSession === session.session_id) {
+        if (remaining.length > 0) {
+          void selectSession(remaining[0].session_id)
+        } else {
+          setSelectedSession(null)
+          setSessionInsights([])
+        }
+      }
+    } catch {
+      setError('Failed to delete history')
+    } finally {
+      setDeletingSession(null)
     }
   }
 
@@ -426,41 +465,55 @@ export function OpportunityEngineClient() {
             ) : (
               <div className="flex flex-col gap-2 max-h-[70vh] overflow-y-auto pr-1">
                 {visibleSessions.map((s) => (
-                  <button
-                    key={s.session_id}
-                    onClick={() => selectSession(s.session_id)}
-                    className={cn(
-                      'text-left rounded-xl border p-3 transition-colors',
-                      selectedSession === s.session_id
-                        ? 'bg-indigo-500/10 border-indigo-500/40'
-                        : 'bg-slate-900/60 border-slate-800 hover:border-slate-700'
-                    )}
-                  >
-                    <div className="flex items-center justify-between gap-2 mb-1">
-                      <span className="text-xs font-semibold text-white">
-                        {formatTimestamp(s.generated_at)}
-                      </span>
-                      <span
-                        className={cn(
-                          'px-1.5 py-0.5 rounded text-[9px] font-medium border',
-                          s.source === 'cron'
-                            ? 'bg-blue-500/10 text-blue-400 border-blue-500/20'
-                            : s.source === 'manual'
-                              ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
-                              : 'bg-slate-700/40 text-slate-400 border-slate-600/40'
-                        )}
-                      >
-                        {SOURCE_LABELS[s.source] ?? s.source}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2 text-[10px] text-slate-500">
-                      <span>{s.insight_count} insights</span>
-                      <span>&middot;</span>
-                      <span>{s.model ?? 'gemini'}</span>
-                      <span>&middot;</span>
-                      <span>{formatDuration(s.duration_ms)}</span>
-                    </div>
-                  </button>
+                  <div key={s.session_id} className="relative">
+                    <button
+                      onClick={() => selectSession(s.session_id)}
+                      className={cn(
+                        'w-full text-left rounded-xl border p-3 pr-9 transition-colors',
+                        selectedSession === s.session_id
+                          ? 'bg-indigo-500/10 border-indigo-500/40'
+                          : 'bg-slate-900/60 border-slate-800 hover:border-slate-700'
+                      )}
+                    >
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <span className="text-xs font-semibold text-white">
+                          {formatTimestamp(s.generated_at)}
+                        </span>
+                        <span
+                          className={cn(
+                            'px-1.5 py-0.5 rounded text-[9px] font-medium border',
+                            s.source === 'cron'
+                              ? 'bg-blue-500/10 text-blue-400 border-blue-500/20'
+                              : s.source === 'manual'
+                                ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20'
+                                : 'bg-slate-700/40 text-slate-400 border-slate-600/40'
+                          )}
+                        >
+                          {SOURCE_LABELS[s.source] ?? s.source}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2 text-[10px] text-slate-500">
+                        <span>{s.insight_count} insights</span>
+                        <span>&middot;</span>
+                        <span>{s.model ?? 'gemini'}</span>
+                        <span>&middot;</span>
+                        <span>{formatDuration(s.duration_ms)}</span>
+                      </div>
+                    </button>
+                    <button
+                      onClick={(e) => { e.stopPropagation(); void deleteSession(s) }}
+                      disabled={deletingSession === s.session_id}
+                      title="Delete this generation"
+                      aria-label="Delete this generation"
+                      className="absolute bottom-2 right-2 p-1.5 rounded-md text-slate-500 hover:text-red-400 hover:bg-red-500/10 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    >
+                      {deletingSession === s.session_id ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Trash2 className="h-3.5 w-3.5" />
+                      )}
+                    </button>
+                  </div>
                 ))}
               </div>
             )}

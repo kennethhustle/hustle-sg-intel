@@ -274,3 +274,64 @@ export async function POST(request: NextRequest) {
     )
   }
 }
+
+// Delete one complete Generation Session — every strategic_insights row that
+// shares the session's grouping key. Reuses the same admin/analyst auth as POST
+// and the exact session-resolution + module scoping used by GET, so it removes
+// the whole session (never a single insight) and never crosses into SEO history.
+export async function DELETE(request: NextRequest) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+
+  if (!user) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  const { data: userData } = await supabase
+    .from('users')
+    .select('role')
+    .eq('id', user.id)
+    .single()
+
+  if (!userData || !['admin', 'analyst'].includes(userData.role)) {
+    return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 })
+  }
+
+  const { searchParams } = new URL(request.url)
+  const sessionId = searchParams.get('session')
+  const isSeo = searchParams.get('module') === 'seo'
+
+  if (!sessionId) {
+    return NextResponse.json({ error: 'Missing session parameter' }, { status: 400 })
+  }
+
+  // Service role is required: strategic_insights has no authenticated DELETE
+  // policy, so a user-client delete would silently affect zero rows.
+  const serviceSupabase = await createServiceClient()
+
+  let q = scopeByModule(
+    serviceSupabase.from('strategic_insights').delete(),
+    isSeo
+  )
+
+  if (sessionId.startsWith('legacy:')) {
+    // Legacy rows carry no stamped session_id; resolve the bucket to its
+    // one-minute created_at window (identical to the GET session logic).
+    const minute = sessionId.slice('legacy:'.length)
+    const start = new Date(`${minute}:00.000Z`)
+    const end = new Date(start.getTime() + 60_000)
+    q = q
+      .gte('created_at', start.toISOString())
+      .lt('created_at', end.toISOString())
+      .filter('metadata->>session_id', 'is', null)
+  } else {
+    q = q.filter('metadata->>session_id', 'eq', sessionId)
+  }
+
+  const { data, error } = await q.select('id')
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 })
+  }
+
+  return NextResponse.json({ deleted: data?.length ?? 0 })
+}
