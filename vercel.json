@@ -1,36 +1,13 @@
 {
   "crons": [
-    {
-      "path": "/api/cron/sf-refresh",
-      "schedule": "0 20 * * *"
-    },
-    {
-      "path": "/api/cron/runcount-refresh",
-      "schedule": "20 20 * * *"
-    },
-    {
-      "path": "/api/cron/myskillsfuture-refresh",
-      "schedule": "40 20 * * *"
-    },
-    {
-      "path": "/api/cron/courses-refresh",
-      "schedule": "50 20 * * *"
-    },
-    {
-      "path": "/api/cron/social-refresh",
-      "schedule": "0 21 * * *"
-    },
-    {
-      "path": "/api/cron/hiring-refresh",
-      "schedule": "30 21 * * *"
-    },
-    {
-      "path": "/api/cron/ai-insights",
-      "schedule": "0 22 * * *"
-    },
-    {
-      "path": "/api/cron/seo-insights",
-      "schedule": "20 22 * * *"
-    }
+    { "path": "/api/cron/marketing-refresh",      "schedule": "0 20 * * *" },
+    { "path": "/api/cron/sf-refresh",             "schedule": "0 20 * * *" },
+    { "path": "/api/cron/runcount-refresh",       "schedule": "20 20 * * *" },
+    { "path": "/api/cron/myskillsfuture-refresh", "schedule": "40 20 * * *" },
+    { "path": "/api/cron/courses-refresh",        "schedule": "50 20 * * *" },
+    { "path": "/api/cron/social-refresh",         "schedule": "0 21 * * *" },
+    { "path": "/api/cron/hiring-refresh",         "schedule": "30 21 * * *" },
+    { "path": "/api/cron/ai-insights",            "schedule": "0 22 * * *" },
+    { "path": "/api/cron/seo-insights",           "schedule": "20 22 * * *" }
   ]
 }
