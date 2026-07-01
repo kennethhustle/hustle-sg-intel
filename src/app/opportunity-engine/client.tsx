@@ -76,7 +76,67 @@ function formatTimestamp(iso: string): string {
   })
 }
 
+// ── Presentation-only executive-summary transform ───────────────────────────
+// Restructures the AI's existing `body` prose into a scannable hierarchy at
+// RENDER time. It does NOT change generation, categories, the model, the prompt
+// or any stored data — it only splits the same text into a summary + bullets so
+// insights can be read in seconds. Degrades gracefully (short bodies just show
+// a summary).
+const ACTION_RE = /\b(recommend|should|must|need to|launch|increase|prioriti[sz]e|invest|focus on|expand|consider|target|leverage|develop|build|create|adopt|reduce|improve|accelerate|double down|capitali[sz]e|explore|implement|establish|strengthen|maintain|monitor)\b/i
+const IMPACT_RE = /\b(risk|threat|impact|revenue|market share|growth|churn|loss|losing|advantage|competitive position|could result|may lead|erod|gain|lose|outpace|fall behind|widen|narrow|exposure|upside|downside)\b/i
+
+function splitSentences(text: string): string[] {
+  return text
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(/(?<=[.!?])\s+(?=[A-Z0-9])/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+}
+
+interface StructuredInsight {
+  summary: string
+  findings: string[]
+  impact: string | null
+  actions: string[]
+}
+
+function structureInsight(body: string): StructuredInsight {
+  const sentences = splitSentences(body ?? '')
+  if (sentences.length === 0) {
+    return { summary: (body ?? '').trim(), findings: [], impact: null, actions: [] }
+  }
+  const summary = sentences[0]
+  const rest = sentences.slice(1)
+
+  const actions = rest.filter((s) => ACTION_RE.test(s))
+  const nonAction = rest.filter((s) => !ACTION_RE.test(s))
+  const impactSentences = nonAction.filter((s) => IMPACT_RE.test(s))
+  const findings = nonAction.filter((s) => !IMPACT_RE.test(s))
+
+  return {
+    summary,
+    findings,
+    impact: impactSentences.length > 0 ? impactSentences.join(' ') : null,
+    actions,
+  }
+}
+
+const PRIORITY_STYLES: Record<'High' | 'Medium' | 'Low', string> = {
+  High: 'bg-red-500/10 text-red-400 border-red-500/20',
+  Medium: 'bg-yellow-500/10 text-yellow-400 border-yellow-500/20',
+  Low: 'bg-slate-700/40 text-slate-400 border-slate-600/40',
+}
+
+function priorityFromSeverity(severity: AlertSeverity): 'High' | 'Medium' | 'Low' {
+  if (severity === 'critical' || severity === 'high') return 'High'
+  if (severity === 'medium') return 'Medium'
+  return 'Low'
+}
+
 function InsightCard({ insight }: { insight: Insight }) {
+  const structured = structureInsight(insight.body)
+  const priority = priorityFromSeverity(insight.severity)
   return (
     <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-5 flex flex-col gap-3">
       {/* Header */}
@@ -109,10 +169,67 @@ function InsightCard({ insight }: { insight: Insight }) {
         {insight.title}
       </h3>
 
-      {/* Body */}
-      <p className="text-xs text-slate-400 leading-relaxed flex-1">
-        {insight.body}
-      </p>
+      {/* Executive summary (presentation-only restructure of insight.body) */}
+      <div className="flex flex-col gap-3 flex-1">
+        {structured.summary && (
+          <p className="text-xs text-slate-300 leading-relaxed">{structured.summary}</p>
+        )}
+
+        {structured.findings.length > 0 && (
+          <div>
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 mb-1">
+              Key Findings
+            </div>
+            <ul className="space-y-1">
+              {structured.findings.map((f, i) => (
+                <li key={i} className="flex gap-2 text-xs text-slate-400 leading-relaxed">
+                  <span className="text-indigo-400 mt-px shrink-0">&bull;</span>
+                  <span>{f}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {structured.impact && (
+          <div>
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 mb-1">
+              Business Impact
+            </div>
+            <p className="text-xs text-slate-400 leading-relaxed">{structured.impact}</p>
+          </div>
+        )}
+
+        {structured.actions.length > 0 && (
+          <div>
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-slate-500 mb-1">
+              Recommended Action
+            </div>
+            <ul className="space-y-1">
+              {structured.actions.map((a, i) => (
+                <li key={i} className="flex gap-2 text-xs text-slate-300 leading-relaxed">
+                  <span className="text-emerald-400 mt-px shrink-0">&rsaquo;</span>
+                  <span>{a}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] font-semibold uppercase tracking-wide text-slate-500">
+            Priority
+          </span>
+          <span
+            className={cn(
+              'inline-flex items-center px-2 py-0.5 rounded text-[10px] font-medium border',
+              PRIORITY_STYLES[priority]
+            )}
+          >
+            {priority}
+          </span>
+        </div>
+      </div>
 
       {/* Footer */}
       <div className="flex items-center justify-between pt-2 border-t border-slate-800/60">
