@@ -107,6 +107,22 @@ export async function ingestAllJobs(): Promise<OverallJobResult> {
       { name: 'indeed', jobs: indeedResult.data ?? [], error: indeedResult.error },
     ]
 
+    // Gated per-competitor career_page purge: only when THIS competitor's career
+    // scrape succeeded AND returned at least one job do we deactivate its prior
+    // active career_page rows, so the fresh validated set replaces them and stale
+    // rows / duplicates drop out. If the scrape failed or returned nothing, the
+    // existing active rows are kept unchanged (fail closed — never wipe valid
+    // data on a transient failure). Scoped per competitor and to career_page
+    // only; JobStreet/MyCareersFuture/Indeed are untouched here.
+    if (careerResult.success && (careerResult.data?.length ?? 0) > 0) {
+      await supabase
+        .from('job_postings')
+        .update({ is_active: false })
+        .eq('competitor_id', competitor.id)
+        .eq('is_active', true)
+        .eq('source', 'career_page')
+    }
+
     // Deduplicate across ALL sources by normalized title. The first source to
     // report a logical job owns the stored row; every other source that reports
     // the same job is folded into raw_data.sources[] instead of a new row.
