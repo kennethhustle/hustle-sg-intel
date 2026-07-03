@@ -128,7 +128,7 @@ async function getData() {
     ytUrl: string | null; ttUrl: string | null
     totalAudience: number | null
     growth24h: number | null; growthPct: number | null; topGrowthPlatform: string | null
-    platformGrowth: Array<{ label: string; delta: number | null; pct: number | null }>
+    platformGrowth: Array<{ label: string; key: string; followers: number | null; delta: number | null; pct: number | null }>
     posts30d: number | null; postFrequency: string
   }
 
@@ -171,18 +171,22 @@ async function getData() {
     let hasPrev = false
     let topGrowthPlatform: string | null = null
     let topDelta = 0
-    const platformGrowth: Array<{ label: string; delta: number | null; pct: number | null }> = []
+    const platformGrowth: Array<{ label: string; key: string; followers: number | null; delta: number | null; pct: number | null }> = []
     for (const p of platformDeltas) {
-      if (p.cur < 0) { platformGrowth.push({ label: p.label, delta: null, pct: null }); continue }
+      const followers = p.cur < 0 ? null : p.cur
+      if (p.cur < 0) { platformGrowth.push({ label: p.label, key: p.key, followers, delta: null, pct: null }); continue }
       const prev = prevFollowerMap.get(`${c.id}:${p.key}`)
-      if (prev === null || prev === undefined) { platformGrowth.push({ label: p.label, delta: null, pct: null }); continue }
+      if (prev === null || prev === undefined) { platformGrowth.push({ label: p.label, key: p.key, followers, delta: null, pct: null }); continue }
       hasPrev = true
       const delta = p.cur - prev
       growthSum += delta
       prevSum += prev
-      platformGrowth.push({ label: p.label, delta, pct: prev > 0 ? (delta / prev) * 100 : null })
+      platformGrowth.push({ label: p.label, key: p.key, followers, delta, pct: prev > 0 ? (delta / prev) * 100 : null })
       if (delta > topDelta) { topDelta = delta; topGrowthPlatform = p.label }
     }
+    // Sort each competitor's channels by follower count desc (no-data last) so
+    // the highest-followed platform renders first wherever this list is shown.
+    platformGrowth.sort((a, b) => (b.followers ?? -1) - (a.followers ?? -1))
     const growth24h = hasPrev ? growthSum : null
     const growthPct = hasPrev && prevSum > 0 ? (growthSum / prevSum) * 100 : null
 
@@ -270,6 +274,18 @@ function buildRecommendation(hustle: { courseTotal: number; ytSubs: number | nul
   }
   parts.push(`Maintain course availability above 60 upcoming runs to stay in top 3.`)
   return parts.slice(0, 2).join(' ')
+}
+
+// ─── Per-platform growth delta (reuses the already-computed platformGrowth) ────
+function GrowthDelta({ g }: { g?: { delta: number | null; pct: number | null } }) {
+  if (!g || g.delta === null) return null
+  const { delta, pct } = g
+  const up = delta > 0, dn = delta < 0
+  const col = up ? 'text-green-400' : dn ? 'text-red-400' : 'text-slate-500'
+  const pctTxt = pct !== null ? ` (${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%)` : ''
+  return (
+    <span className={`text-[10px] ${col}`}>{up ? '\u25B2 +' : dn ? '\u25BC ' : '\u2014 '}{delta.toLocaleString()}{pctTxt}</span>
+  )
 }
 
 // ─── Section header ───────────────────────────────────────────────────────────
@@ -402,6 +418,8 @@ export default async function SocialIntelligencePage() {
                   const rank = idx + 1
                   const isHustle = comp.isHustle
                   const rankLabel = rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : `#${rank}`
+                  // Per-platform growth keyed by platform for the count cells below.
+                  const growthByKey = new Map(comp.platformGrowth.map(p => [p.key, p]))
                   return (
                     <tr
                       key={comp.id}
@@ -423,43 +441,58 @@ export default async function SocialIntelligencePage() {
                       </td>
                       {/* Instagram */}
                       <td className="px-4 py-3.5 text-right font-mono text-sm text-slate-500">
-                        {comp.igFollowers !== null
-                          ? (comp.igUrl
+                        {comp.igFollowers !== null ? (
+                          <div className="flex flex-col items-end leading-tight">
+                            {comp.igUrl
                               ? <a href={comp.igUrl} target="_blank" rel="noopener noreferrer" title={`Open ${comp.name} Instagram profile`} className="hover:text-white hover:underline transition-colors">{comp.igFollowers.toLocaleString()}</a>
-                              : comp.igFollowers.toLocaleString())
-                          : <span className="text-slate-700">—</span>}
+                              : <span>{comp.igFollowers.toLocaleString()}</span>}
+                            <GrowthDelta g={growthByKey.get('instagram')} />
+                          </div>
+                        ) : <span className="text-slate-700">—</span>}
                       </td>
                       {/* Facebook */}
                       <td className="px-4 py-3.5 text-right font-mono text-sm text-slate-500">
-                        {comp.fbFollowers !== null
-                          ? (comp.fbUrl
+                        {comp.fbFollowers !== null ? (
+                          <div className="flex flex-col items-end leading-tight">
+                            {comp.fbUrl
                               ? <a href={comp.fbUrl} target="_blank" rel="noopener noreferrer" title={`Open ${comp.name} Facebook page`} className="hover:text-white hover:underline transition-colors">{comp.fbFollowers.toLocaleString()}</a>
-                              : comp.fbFollowers.toLocaleString())
-                          : <span className="text-slate-700">—</span>}
+                              : <span>{comp.fbFollowers.toLocaleString()}</span>}
+                            <GrowthDelta g={growthByKey.get('facebook')} />
+                          </div>
+                        ) : <span className="text-slate-700">—</span>}
                       </td>
                       {/* LinkedIn */}
                       <td className="px-4 py-3.5 text-right font-mono text-sm text-slate-500">
-                        {comp.liFollowers !== null
-                          ? (comp.liUrl
+                        {comp.liFollowers !== null ? (
+                          <div className="flex flex-col items-end leading-tight">
+                            {comp.liUrl
                               ? <a href={comp.liUrl} target="_blank" rel="noopener noreferrer" title={`Open ${comp.name} LinkedIn page`} className="hover:text-white hover:underline transition-colors">{comp.liFollowers.toLocaleString()}</a>
-                              : comp.liFollowers.toLocaleString())
-                          : <span className="text-slate-700">—</span>}
+                              : <span>{comp.liFollowers.toLocaleString()}</span>}
+                            <GrowthDelta g={growthByKey.get('linkedin')} />
+                          </div>
+                        ) : <span className="text-slate-700">—</span>}
                       </td>
                       {/* YouTube */}
                       <td className="px-4 py-3.5 text-right font-mono text-sm">
-                        {comp.ytSubs !== null
-                          ? (comp.ytUrl
+                        {comp.ytSubs !== null ? (
+                          <div className="flex flex-col items-end leading-tight">
+                            {comp.ytUrl
                               ? <a href={comp.ytUrl} target="_blank" rel="noopener noreferrer" title={`Open ${comp.name} YouTube channel`} className="text-white font-semibold hover:underline transition-colors">{comp.ytSubs.toLocaleString()}</a>
-                              : <span className="text-white font-semibold">{comp.ytSubs.toLocaleString()}</span>)
-                          : <span className="text-slate-700">—</span>}
+                              : <span className="text-white font-semibold">{comp.ytSubs.toLocaleString()}</span>}
+                            <GrowthDelta g={growthByKey.get('youtube')} />
+                          </div>
+                        ) : <span className="text-slate-700">—</span>}
                       </td>
                       {/* TikTok */}
                       <td className="px-4 py-3.5 text-right font-mono text-sm text-slate-500">
-                        {comp.ttFollowers !== null
-                          ? (comp.ttUrl
+                        {comp.ttFollowers !== null ? (
+                          <div className="flex flex-col items-end leading-tight">
+                            {comp.ttUrl
                               ? <a href={comp.ttUrl} target="_blank" rel="noopener noreferrer" title={`Open ${comp.name} TikTok profile`} className="hover:text-white hover:underline transition-colors">{comp.ttFollowers.toLocaleString()}</a>
-                              : comp.ttFollowers.toLocaleString())
-                          : <span className="text-slate-700">—</span>}
+                              : <span>{comp.ttFollowers.toLocaleString()}</span>}
+                            <GrowthDelta g={growthByKey.get('tiktok')} />
+                          </div>
+                        ) : <span className="text-slate-700">—</span>}
                       </td>
                       {/* Total */}
                       <td className="px-5 py-3.5 text-right font-mono text-sm">
