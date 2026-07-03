@@ -218,7 +218,10 @@ export default async function HiringIntelligencePage() {
                           <span className="text-slate-500 text-xs">Unknown</span>
                         )}
                       </td>
-                      <td className="px-4 py-3 text-white text-sm font-medium max-w-[200px] truncate">
+                      <td
+                        className="px-4 py-3 text-white text-sm font-medium max-w-[200px] truncate"
+                        title={job.title}
+                      >
                         {job.title}
                       </td>
                       <td className="px-4 py-3 text-slate-400 text-xs max-w-[120px] truncate">

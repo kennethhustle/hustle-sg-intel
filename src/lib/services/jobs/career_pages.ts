@@ -119,6 +119,32 @@ const REJECT_TITLE_PATTERNS: RegExp[] = [
   /\btrillion\b|\bbillion\b/i,
 ]
 
+// Learning-content markers. Training-provider career pages advertise courses,
+// programmes, certifications and workshops alongside (or instead of) real
+// vacancies. These words appear in learning offerings but effectively never in
+// a genuine short job title, so any title containing one is rejected across
+// EVERY extraction path. Words that legitimately head real roles — "Course
+// Consultant", "Programme Manager", "Curriculum Developer", "Training
+// Executive", "Marketing Strategist" (singular) — are deliberately NOT listed
+// so genuine job extraction is unaffected.
+const COURSE_TITLE_PATTERNS: RegExp[] = [
+  /\bcertified\b/i,
+  /\bcertification\b/i,
+  /\bcertificate\b/i,
+  /\bworkshop\b/i,
+  /\bboot ?camp\b/i,
+  /\bmaster ?class\b/i,
+  /\bseminar\b/i,
+  /\bwebinar\b/i,
+  /\bsyllabus\b/i,
+  /\bcourseware\b/i,
+  /\bmodules?\b/i,
+  /\benrol/i,
+  /\bintake\b/i,
+  /\bfundamentals\b/i,
+  /\bstrategies\b/i,
+]
+
 // Whitelisted role signals — at least one must appear for the unstructured
 // (job-card / link / heading) extraction paths to accept a title.
 const ROLE_KEYWORD_RE =
@@ -136,14 +162,23 @@ const NON_TITLE_PATTERNS: RegExp[] = [
   /\b(?:degree|diploma)\b/i, // qualification ("... degree in marketing")
   /related field/i, // qualification ("... or related field")
   /\bspectrum\b/i, // responsibility ("... full spectrum of ...")
+  // Sentence / marketing / showcase connectives. Genuine job titles are terse
+  // noun phrases and effectively never contain these function words, whereas
+  // project bullets, blog/tutorial headings and marketing banners do (e.g.
+  // "... the Yahoo Finance API for ...", "... Marketing With AI", "Instructors
+  // from Top Companies"). "of" is deliberately excluded because it heads real
+  // titles ("Head of Marketing", "Director of Sales").
+  /\b(?:the|for|with|from|your|our|their|top)\b/i,
 ]
 
-// Genuine job titles do not begin with an imperative verb; responsibility
-// bullets do ("Prepare ...", "Track ...", "Develop ..."). "support" is
+// Genuine job titles do not begin with a verb. Responsibility bullets begin
+// with an imperative ("Prepare ...", "Track ...") and project / portfolio /
+// showcase items begin with a past-tense accomplishment verb ("Integrated ...",
+// "Built ...", "Developed ..."). Neither is a job title. "support" is
 // deliberately excluded because it legitimately starts real titles
 // (e.g. "Support Engineer").
 const RESPONSIBILITY_LEAD_RE =
-  /^(?:prepare|track|provide|coordinate|meet|develop|ensure|conduct|assist|handle|achieve|maintain|liaise|generate|identify|monitor|oversee|perform|execute|deliver|drive|build|create|collaborate|respond|process|update|review)\b/i
+  /^(?:prepare|track|provide|coordinate|meet|develop|ensure|conduct|assist|handle|achieve|maintain|liaise|generate|identify|monitor|oversee|perform|execute|deliver|drive|build|create|collaborate|respond|process|update|review|integrated|built|developed|created|designed|implemented|engineered|launched|deployed|architected|migrated|optimized|automated|analyzed|configured|programmed)\b/i
 
 /** True for paragraphs, sentences, and perk/benefit/marketing lines. */
 function isRejectedTitle(title: string): boolean {
@@ -152,6 +187,7 @@ function isRejectedTitle(title: string): boolean {
   const words = t.split(/\s+/)
   if (words.length > 10) return true
   if (/[.!?]$/.test(t) && words.length > 6) return true
+  if (COURSE_TITLE_PATTERNS.some((re) => re.test(t))) return true
   return REJECT_TITLE_PATTERNS.some((re) => re.test(t))
 }
 

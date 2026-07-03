@@ -73,11 +73,26 @@ interface MCFAPIJob {
   }
 }
 
+// Some competitors are indexed on MyCareersFuture under a fuller legal name
+// than the internal display name (e.g. "Skills Dev Academy" is listed as
+// "Skills Development Academy"). The alias affects ONLY the search keyword;
+// companyMatches still validates against the real competitor name, so employer
+// matching behaviour is unchanged. Keyed by the competitor's display name.
+const MCF_SEARCH_ALIASES: Record<string, string> = {
+  'Skills Dev Academy': 'Skills Development Academy',
+}
+
 export async function scrapeMyCareersFuture(
   companyName: string
 ): Promise<ScraperResult<MCFJob[]>> {
   const scraped_at = new Date().toISOString()
-  const encodedName = encodeURIComponent(companyName)
+  const searchTerm = MCF_SEARCH_ALIASES[companyName] ?? companyName
+  if (searchTerm !== companyName) {
+    console.log(
+      `[MyCareersFuture] Using search alias "${searchTerm}" for competitor "${companyName}"`
+    )
+  }
+  const encodedName = encodeURIComponent(searchTerm)
   const url = `https://api.mycareersfuture.gov.sg/v2/jobs?search=${encodedName}&limit=20&sortBy=new_posting_date`
 
   try {
