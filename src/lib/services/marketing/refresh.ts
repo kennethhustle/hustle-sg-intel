@@ -16,6 +16,7 @@
  */
 
 import { createServiceClient } from '@/lib/supabase/server'
+import { reportSourceSuccess, reportSourceFailure } from '@/lib/services/data-sources'
 
 // ─── Small retry helper ────────────────────────────────────────────────────────
 // Retries a failed fetch-like async call once after a short delay. Used for the
@@ -339,6 +340,33 @@ export async function runMarketingRefresh(
     const finalStatus: 'success' | 'partial' =
       result.errors.length === 0 ? 'success' : 'partial'
     await finaliseLog(finalStatus)
+
+    // Report per-source health. Never let this throw or block the return.
+    try {
+      if (result.meta_ads_updated > 0) {
+        await reportSourceSuccess('meta_ad_library', { updated: result.meta_ads_updated })
+      } else {
+        const metaErrors = result.errors.filter((e) => e.field === 'meta_ads')
+        const message = metaErrors.length > 0
+          ? metaErrors.map((e) => `${e.competitor}: ${e.error}`).join(' | ')
+          : 'Meta Ad Library returned no results for any competitor'
+        await reportSourceFailure('meta_ad_library', message, false)
+      }
+
+      if (result.reviews_updated > 0) {
+        await reportSourceSuccess('google_places', { updated: result.reviews_updated })
+      } else if (!process.env.GOOGLE_PLACES_API_KEY) {
+        await reportSourceFailure('google_places', 'GOOGLE_PLACES_API_KEY is not configured', false)
+      } else {
+        const placesErrors = result.errors.filter((e) => e.field === 'google_reviews')
+        const message = placesErrors.length > 0
+          ? placesErrors.map((e) => `${e.competitor}: ${e.error}`).join(' | ')
+          : 'Google Places API returned no results for any competitor'
+        await reportSourceFailure('google_places', message, false)
+      }
+    } catch (err) {
+      console.error('Failed to report marketing source status:', err)
+    }
 
     return result
 

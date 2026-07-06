@@ -11,6 +11,7 @@
 import type { ReactNode } from 'react'
 import { AppLayout } from '@/components/layout/app-layout'
 import { DataSourceBadge } from '@/components/dashboard/data-source-badge'
+import { SourcePanel } from '@/components/dashboard/source-panel'
 import { createClient } from '@/lib/supabase/server'
 
 export const revalidate = 300
@@ -491,6 +492,8 @@ export default async function SearchIntelligencePage() {
             </div>
           </Section>
         </div>
+
+        <SourcePanel module="seo_intelligence" />
 
         {/* ── Footer ── */}
         <div className="text-[10px] text-slate-700 flex flex-wrap gap-4 pb-2">

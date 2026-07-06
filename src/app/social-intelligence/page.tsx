@@ -15,6 +15,7 @@ import { createClient } from '@/lib/supabase/server'
 import { AppLayout } from '@/components/layout/app-layout'
 import { DataSourceBadge } from '@/components/dashboard/data-source-badge'
 import { ModuleStatus } from '@/components/dashboard/module-status'
+import { SourcePanel } from '@/components/dashboard/source-panel'
 
 export const revalidate = 300
 
@@ -496,7 +497,7 @@ export default async function SocialIntelligencePage() {
             </table>
             <div className="px-5 py-3 border-t border-slate-800/50 bg-slate-900/40">
               <p className="text-[11px] text-slate-600">
-                YouTube subscribers from live API (updated daily). Instagram, Facebook, LinkedIn, and TikTok follower data shows MANUAL where a verified_manual snapshot exists, otherwise unavailable — platforms restrict automated access.
+                Source: YouTube Data API (updated daily). Instagram, Facebook, LinkedIn, and TikTok — Source: scraping blocked, shown MANUAL where a verified_manual snapshot exists, otherwise unavailable.
               </p>
             </div>
           </div>
@@ -741,6 +742,8 @@ export default async function SocialIntelligencePage() {
             </div>
           )}
         </section>
+
+        <SourcePanel module="social_intelligence" />
 
         {/* Footer */}
         <div className="border-t border-slate-800 pt-4 flex items-center justify-between">

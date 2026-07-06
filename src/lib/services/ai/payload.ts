@@ -7,6 +7,7 @@
  */
 import { createServiceClient } from '@/lib/supabase/server'
 import { CATEGORY_CLUSTERS, classifyCourse, type CategoryCluster } from '@/lib/services/courses/categories'
+import { getSourceStatuses } from '@/lib/services/data-sources'
 
 type SupabaseClient = Awaited<ReturnType<typeof createServiceClient>>
 
@@ -117,6 +118,22 @@ export interface DataFreshnessEntry {
   last_success_at: string | null
 }
 
+export interface SourceStatusEntry {
+  name: string
+  module: string
+  status: string
+  reliability_level: 'high' | 'medium' | 'low'
+  is_stale: boolean
+  last_success_at: string | null
+}
+
+export interface ExcludedDataEntry {
+  source: string
+  module: string
+  reason: string
+  last_success_at: string | null
+}
+
 export interface IntelligencePayload {
   competitorOverview: CompetitorOverview[]
   courseIntel: CourseIntelEntry[]
@@ -130,6 +147,8 @@ export interface IntelligencePayload {
   }
   dataFreshness: DataFreshnessEntry[]
   recentInsightTitles: string[]
+  sourceStatus: SourceStatusEntry[]
+  excludedData: ExcludedDataEntry[]
 }
 
 const TOP_N_COURSES = 5
@@ -159,6 +178,59 @@ function classifyJobKeyword(title: string, department: string | null): 'sales' |
   return 'other'
 }
 
+/**
+ * Build the sourceStatus and excludedData sections from the live data source
+ * registry (see data-sources.ts / migration 010_data_sources.sql). Only
+ * enabled sources are included in sourceStatus, per spec. excludedData is
+ * derived dynamically — any enabled source whose status means it can't
+ * currently back a claim (unavailable/failed/not_configured), plus manual
+ * and static sources (which are always "weak" in the sense of being
+ * point-in-time snapshots rather than live data).
+ */
+async function buildSourceAwareness(): Promise<{ sourceStatus: SourceStatusEntry[]; excludedData: ExcludedDataEntry[] }> {
+  const sources = await getSourceStatuses()
+  const enabled = sources.filter((s) => s.is_enabled)
+
+  const sourceStatus: SourceStatusEntry[] = enabled.map((s) => ({
+    name: s.source_name,
+    module: s.module,
+    status: s.status,
+    reliability_level: s.reliability_level,
+    is_stale: s.is_stale,
+    last_success_at: s.last_success_at,
+  }))
+
+  const excludedData: ExcludedDataEntry[] = enabled
+    .filter((s) => ['unavailable', 'failed', 'not_configured', 'manual_only', 'static_only'].includes(s.status))
+    .map((s) => {
+      let reason: string
+      switch (s.status) {
+        case 'unavailable':
+          reason = 'Source unavailable — do not cite as live data.'
+          break
+        case 'failed':
+          reason = `Most recent run failed${s.error_message ? `: ${s.error_message}` : ''}.`
+          break
+        case 'not_configured':
+          reason = 'Not configured — no API key/credential set up.'
+          break
+        case 'manual_only':
+          reason = `Manual/point-in-time entry${s.last_success_at ? `, last verified ${s.last_success_at}` : ', never verified'}.`
+          break
+        default:
+          reason = `Static snapshot${s.last_success_at ? `, last verified ${s.last_success_at}` : ', never verified'}.`
+      }
+      return {
+        source: s.source_name,
+        module: s.module,
+        reason,
+        last_success_at: s.last_success_at,
+      }
+    })
+
+  return { sourceStatus, excludedData }
+}
+
 export async function buildIntelligencePayload(supabase: SupabaseClient): Promise<IntelligencePayload> {
   const now = Date.now()
   const sevenDaysAgo = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString()
@@ -185,6 +257,7 @@ export async function buildIntelligencePayload(supabase: SupabaseClient): Promis
   const competitorNameById = new Map(competitors.map((c) => [c.id, c.name]))
 
   if (competitorIds.length === 0) {
+    const { sourceStatus, excludedData } = await buildSourceAwareness()
     return {
       competitorOverview: [],
       courseIntel: [],
@@ -195,6 +268,8 @@ export async function buildIntelligencePayload(supabase: SupabaseClient): Promis
       alertsAndChanges: { recentAlerts: [], recentRefreshFailures: [] },
       dataFreshness: [],
       recentInsightTitles: [],
+      sourceStatus,
+      excludedData,
     }
   }
 
@@ -554,6 +629,9 @@ export async function buildIntelligencePayload(supabase: SupabaseClient): Promis
 
   const recentInsightTitles: string[] = ((recentInsightsRaw ?? []) as Array<{ title: string }>).map((i) => i.title)
 
+  // ---------- Data source status awareness ----------
+  const { sourceStatus, excludedData } = await buildSourceAwareness()
+
   return {
     competitorOverview,
     courseIntel,
@@ -564,6 +642,8 @@ export async function buildIntelligencePayload(supabase: SupabaseClient): Promis
     alertsAndChanges: { recentAlerts, recentRefreshFailures },
     dataFreshness,
     recentInsightTitles,
+    sourceStatus,
+    excludedData,
   }
 }
 

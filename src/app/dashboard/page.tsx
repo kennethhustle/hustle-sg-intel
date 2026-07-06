@@ -6,6 +6,7 @@ import { DataSourceBadge } from '@/components/dashboard/data-source-badge'
 import { SocialBarChart } from '@/components/charts/social-bar-chart'
 import { createClient } from '@/lib/supabase/server'
 import { getRefreshHealth } from '@/lib/services/refresh-log'
+import { computeDataConfidence } from '@/lib/services/data-sources'
 import { formatNumber, formatRelativeTime, getSeverityBgClass, cn } from '@/lib/utils'
 import { Trophy, TrendingUp, Users, BookOpen, Bell, Building2, Zap } from 'lucide-react'
 import Link from 'next/link'
@@ -15,7 +16,7 @@ export const revalidate = 300 // Revalidate every 5 minutes
 async function getDashboardData() {
   const supabase = await createClient()
 
-  const [summaryRes, rankingRes, alertsRes, insightsRes, lastSocialRes, refreshHealth] = await Promise.all([
+  const [summaryRes, rankingRes, alertsRes, insightsRes, lastSocialRes, refreshHealth, confidence] = await Promise.all([
     supabase.rpc('get_competitor_dashboard_summary'),
     supabase.rpc('get_social_ranking'),
     supabase
@@ -38,6 +39,7 @@ async function getDashboardData() {
       .limit(1)
       .maybeSingle(),
     getRefreshHealth(),
+    computeDataConfidence(),
   ])
 
   const summary = Array.isArray(summaryRes.data) ? summaryRes.data[0] : summaryRes.data
@@ -50,6 +52,7 @@ async function getDashboardData() {
     insights: insightsRes.data ?? [],
     lastUpdated: lastSocialRes.data?.scraped_at ?? null,
     refreshHealth,
+    confidence,
   }
 }
 
@@ -64,8 +67,18 @@ const insightTypeLabel: Record<string, string> = {
   course_intel: 'Course Intel',
 }
 
+const CONFIDENCE_LEVEL_CFG: Record<'high' | 'medium' | 'low', { cls: string }> = {
+  high:   { cls: 'bg-emerald-950/50 text-emerald-400 border-emerald-800/50' },
+  medium: { cls: 'bg-amber-950/50 text-amber-400 border-amber-800/50' },
+  low:    { cls: 'bg-red-950/50 text-red-400 border-red-800/50' },
+}
+
 export default async function DashboardPage() {
-  const { summary, ranking, alerts, insights, lastUpdated, refreshHealth } = await getDashboardData()
+  const { summary, ranking, alerts, insights, lastUpdated, refreshHealth, confidence } = await getDashboardData()
+
+  const confColor = confidence.score >= 70 ? 'emerald' : confidence.score >= 40 ? 'amber' : 'red'
+  const confRingColor = confColor === 'emerald' ? '#34d399' : confColor === 'amber' ? '#fbbf24' : '#f87171'
+  const confTextColor = confColor === 'emerald' ? 'text-emerald-400' : confColor === 'amber' ? 'text-amber-400' : 'text-red-400'
 
   // Build bar chart data from ranking
   const barChartData = ranking.map((r: {
@@ -170,6 +183,55 @@ export default async function DashboardPage() {
               </div>
             )
           })}
+        </div>
+      </div>
+
+      {/* Data Confidence */}
+      <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-5 mb-6">
+        <div className="flex items-start justify-between mb-4 gap-4 flex-wrap">
+          <div className="flex items-center gap-4">
+            <div className="relative w-16 h-16 shrink-0">
+              <svg viewBox="0 0 64 64" className="w-16 h-16 -rotate-90">
+                <circle cx="32" cy="32" r="28" fill="none" stroke="#1e293b" strokeWidth="6" />
+                <circle
+                  cx="32" cy="32" r="28" fill="none"
+                  stroke={confRingColor} strokeWidth="6" strokeLinecap="round"
+                  strokeDasharray={`${(confidence.score / 100) * 175.9} 175.9`}
+                />
+              </svg>
+              <div className="absolute inset-0 flex items-center justify-center">
+                <span className={cn('text-sm font-bold', confTextColor)}>{confidence.score}%</span>
+              </div>
+            </div>
+            <div>
+              <h2 className="text-sm font-semibold text-white">Data Confidence: {confidence.score}%</h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Weighted across course, marketing, hiring, social, and SEO data sources
+              </p>
+            </div>
+          </div>
+          <Link
+            href="/settings/data-sources"
+            className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors shrink-0"
+          >
+            View data sources →
+          </Link>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+          {confidence.breakdown.map((row) => (
+            <div key={row.module} className="flex items-center justify-between gap-2 rounded-lg bg-slate-800/40 border border-slate-700/50 px-3 py-2">
+              <div className="min-w-0">
+                <p className="text-xs text-slate-300 truncate">{row.label}</p>
+                <p className="text-[10px] text-slate-600 truncate">{row.reason}</p>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <span className="text-xs font-mono text-slate-400">{row.score}</span>
+                <span className={cn('inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold border uppercase', CONFIDENCE_LEVEL_CFG[row.level].cls)}>
+                  {row.level}
+                </span>
+              </div>
+            </div>
+          ))}
         </div>
       </div>
 

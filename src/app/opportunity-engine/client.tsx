@@ -393,10 +393,7 @@ export function OpportunityEngineClient() {
       ) : filtered.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-16 text-slate-500">
           <Zap className="h-12 w-12 mb-3 opacity-20" />
-          <p className="text-sm">No insights yet</p>
-          <p className="text-xs text-slate-600 mt-1">
-            Click &quot;Regenerate Insights&quot; to generate AI insights from current data
-          </p>
+          <p className="text-sm">No insights yet — run Regenerate Insights or wait for the 01:15 AM SGT refresh.</p>
           {insights.length === 0 && !loading && (
             <div className="mt-4">
               <DataUnavailable label="Run the AI cron or click Regenerate above" />

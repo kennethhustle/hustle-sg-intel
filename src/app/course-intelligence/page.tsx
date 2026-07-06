@@ -2,6 +2,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { AppLayout } from '@/components/layout/app-layout'
 import { DataSourceBadge } from '@/components/dashboard/data-source-badge'
 import { ModuleStatus } from '@/components/dashboard/module-status'
+import { SourcePanel } from '@/components/dashboard/source-panel'
 import { classifyCourse } from '@/lib/services/courses/categories'
 
 export const revalidate = 300
@@ -28,36 +29,16 @@ function fmtScraped(iso: string) {
   return d.toLocaleDateString('en-SG', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: true, timeZone: 'Asia/Singapore' })
 }
 
-function isHustle(raw: string) { return raw.toUpperCase().includes('HUSTLE') }
+function isHustleRaw(raw: string) { return raw.toUpperCase().includes('HUSTLE') }
 
-const GROUP: Record<string, string> = {
-  'BELLS INSTITUTE OF HIGHER LEARNING PTE. LTD.': 'BELLS Institute',
-  'VERTICAL INSTITUTE PTE. LTD.':                 'Vertical Institute',
-  'OOM PTE. LTD.':                                'OOm Pte Ltd',
-  'SKILLS DEVELOPMENT ACADEMY PTE. LTD.':         'Skills Dev Academy',
-  'INFO-TECH SYSTEMS LTD.':                       'InfoTech Academy',
-  '@ASK TRAINING PTE. LTD.':                      'ASK Training',
-  'HEICODERS ACADEMY PRIVATE LIMITED':            'Heicoders Academy',
-  'HAPPY TOGETHER PTE. LTD.':                     'Happy Together',
-  'EQUINET ACADEMY PRIVATE LIMITED':              'Equinet Academy',
-  'HUSTLE INSTITUTE PTE. LTD.':                   'Hustle SG',
-  'HUSTLE ACADEMY PTE. LTD.':                     'Hustle SG',
+// Neutral fallback palette used when a provider has no competitor_id match
+// (and therefore no competitors.color) — cycled by provider name hash.
+const FALLBACK_PALETTE = ['#94a3b8', '#64748b', '#a1a1aa', '#78716c', '#71717a']
+function fallbackColor(name: string) {
+  let h = 0
+  for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0
+  return FALLBACK_PALETTE[h % FALLBACK_PALETTE.length]
 }
-function grp(raw: string) { return isHustle(raw) ? 'Hustle SG' : (GROUP[raw] ?? raw) }
-
-const COLORS: Record<string, string> = {
-  'InfoTech Academy':   '#00d4e0',
-  'Skills Dev Academy': '#ff5555',
-  'OOm Pte Ltd':        '#00c8c8',
-  'Hustle SG':          '#a855f7',
-  'Heicoders Academy':  '#22d3ee',
-  'ASK Training':       '#f0c000',
-  'Equinet Academy':    '#f59e0b',
-  'BELLS Institute':    '#e2e8f0',
-  'Vertical Institute': '#4ade80',
-  'Happy Together':     '#f472b6',
-}
-function color(name: string) { return COLORS[name] ?? '#94a3b8' }
 
 function demand(runs: number): { label: string; icon: string; cls: string } {
   if (runs >= 20) return { label: 'VERY HIGH', icon: '🔥', cls: 'text-red-500' }
@@ -65,16 +46,6 @@ function demand(runs: number): { label: string; icon: string; cls: string } {
   if (runs >= 2)  return { label: 'MEDIUM',    icon: '◈',  cls: 'text-blue-400' }
   return              { label: 'LOW',      icon: '·',  cls: 'text-slate-500' }
 }
-
-// Providers shown in the debug validation table
-const DEBUG_PROVIDERS = new Set([
-  'HUSTLE INSTITUTE PTE. LTD.',
-  'HUSTLE ACADEMY PTE. LTD.',
-  '@ASK TRAINING PTE. LTD.',
-  'BELLS INSTITUTE OF HIGHER LEARNING PTE. LTD.',
-  'EQUINET ACADEMY PRIVATE LIMITED',
-  'VERTICAL INSTITUTE PTE. LTD.',
-])
 
 // ═══════════════════════════════════════════════════
 // TYPES
@@ -84,6 +55,7 @@ interface Course {
   sf_ref_no: string
   title: string
   provider_name: string
+  competitor_id: string | null
   category_text: string | null
   has_active_runs: boolean
   respondent_count: number
@@ -96,8 +68,18 @@ interface Course {
   is_active: boolean
 }
 
-interface ProviderRow {
+interface CompetitorInfo {
+  id: string
   name: string
+  color: string
+  is_hustle: boolean
+}
+
+interface ProviderRow {
+  /** Grouping key: competitor id when known, else the raw provider_name string */
+  key: string
+  name: string
+  color: string
   isHustle: boolean
   topCourse: Course
   top3: Course[]
@@ -119,33 +101,53 @@ function median(values: number[]): number | null {
 async function getData() {
   const supabase = await createServiceClient()
 
-  const { data, error } = await supabase
-    .from('sf_courses')
-    .select(
-      'sf_ref_no, title, provider_name, category_text, has_active_runs, respondent_count, upcoming_run_count, scraped_at, category_cluster, course_fee, first_seen_at, last_seen_at, is_active',
-    )
+  const [{ data, error }, { data: competitorRows }] = await Promise.all([
+    supabase
+      .from('sf_courses')
+      .select(
+        'sf_ref_no, title, provider_name, competitor_id, category_text, has_active_runs, respondent_count, upcoming_run_count, scraped_at, category_cluster, course_fee, first_seen_at, last_seen_at, is_active',
+      ),
+    supabase.from('competitors').select('id, name, color, is_hustle'),
+  ])
 
   if (error || !data || data.length === 0) return null
 
   const courses = data as Course[]
+  const competitors = (competitorRows ?? []) as CompetitorInfo[]
+  const competitorById = new Map(competitors.map(c => [c.id, c]))
+
   const lastScraped = courses.reduce(
     (m, c) => (c.scraped_at > m ? c.scraped_at : m),
     courses[0].scraped_at,
   )
 
-  // ── Group by normalised provider ──
-  const pMap = new Map<string, Course[]>()
-  for (const c of courses) {
-    const k = grp(c.provider_name)
-    if (!pMap.has(k)) pMap.set(k, [])
-    pMap.get(k)!.push(c)
+  // Resolve a course to its display group: competitor row when competitor_id
+  // matches a known competitor, otherwise fall back to the raw provider_name
+  // string (grouping key = provider_name in that case).
+  function resolveGroup(c: Course): { key: string; name: string; color: string; isHustle: boolean } {
+    const comp = c.competitor_id ? competitorById.get(c.competitor_id) : undefined
+    if (comp) {
+      return { key: comp.id, name: comp.name, color: comp.color, isHustle: comp.is_hustle }
+    }
+    return { key: c.provider_name, name: c.provider_name, color: fallbackColor(c.provider_name), isHustle: isHustleRaw(c.provider_name) }
   }
 
-  const rows: ProviderRow[] = Array.from(pMap.entries()).map(([name, pc]) => {
+  // ── Group by competitor (fallback: provider_name string) ──
+  const pMap = new Map<string, { group: ReturnType<typeof resolveGroup>; courses: Course[] }>()
+  for (const c of courses) {
+    const group = resolveGroup(c)
+    const existing = pMap.get(group.key)
+    if (existing) existing.courses.push(c)
+    else pMap.set(group.key, { group, courses: [c] })
+  }
+
+  const rows: ProviderRow[] = Array.from(pMap.values()).map(({ group, courses: pc }) => {
     const sorted = [...pc].sort((a, b) => (b.upcoming_run_count ?? 0) - (a.upcoming_run_count ?? 0))
     return {
-      name,
-      isHustle: isHustle(pc[0].provider_name),
+      key: group.key,
+      name: group.name,
+      color: group.color,
+      isHustle: group.isHustle,
       topCourse: sorted[0],
       top3: sorted.slice(0, 3),
       topRuns: sorted[0]?.upcoming_run_count ?? 0,
@@ -160,15 +162,27 @@ async function getData() {
   const maxRuns    = activeRows[0]?.topRuns ?? 1
   const hasRunData = activeRows.length > 0
 
-  // ── Debug table: selected providers, sorted by provider then run count DESC ──
-  const debugCourses = courses
-    .filter(c => DEBUG_PROVIDERS.has(c.provider_name))
+  // ── Validation sample: Hustle SG + top tracked competitors, sorted by
+  //    provider then run count DESC. Driven by the competitors table rather
+  //    than a hardcoded provider name list. ──
+  const topCompetitorIds = new Set(
+    [...activeRows]
+      .filter(r => !r.isHustle)
+      .slice(0, 4)
+      .map(r => r.key)
+  )
+  const hustleIds = new Set(competitors.filter(c => c.is_hustle).map(c => c.id))
+  const validationCourses = courses
+    .filter(c => (c.competitor_id && (hustleIds.has(c.competitor_id) || topCompetitorIds.has(c.competitor_id))) || isHustleRaw(c.provider_name))
     .sort((a, b) => {
-      const pa = grp(a.provider_name)
-      const pb = grp(b.provider_name)
-      if (pa !== pb) return pa.localeCompare(pb)
+      const ga = resolveGroup(a).name
+      const gb = resolveGroup(b).name
+      if (ga !== gb) return ga.localeCompare(gb)
       return (b.upcoming_run_count ?? 0) - (a.upcoming_run_count ?? 0)
     })
+  const validationLabel = [...hustleIds].length > 0 || topCompetitorIds.size > 0
+    ? Array.from(new Set(validationCourses.map(c => resolveGroup(c).name))).join(' · ')
+    : 'No competitors configured'
 
   // ── Category Clusters: aggregate by category_cluster (fallback to classifyCourse) ──
   type ClusterAgg = {
@@ -180,29 +194,31 @@ async function getData() {
   const clusterMap = new Map<string, ClusterAgg>()
   for (const c of courses) {
     const cluster = c.category_cluster ?? classifyCourse(c.title, c.category_text)
-    const providerName = grp(c.provider_name)
+    const group = resolveGroup(c)
     const agg = clusterMap.get(cluster) ?? { cluster, totalRuns: 0, providers: new Set<string>(), hustleRuns: 0 }
     const runs = c.upcoming_run_count ?? 0
     agg.totalRuns += runs
-    agg.providers.add(providerName)
-    if (isHustle(c.provider_name)) agg.hustleRuns += runs
+    agg.providers.add(group.key)
+    if (group.isHustle) agg.hustleRuns += runs
     clusterMap.set(cluster, agg)
   }
   // Compute best-competitor total runs per cluster (sum across their courses, not just max single course)
-  const clusterCompetitorRuns = new Map<string, Map<string, number>>()
+  const clusterCompetitorRuns = new Map<string, Map<string, { name: string; runs: number }>>()
   for (const c of courses) {
-    if (isHustle(c.provider_name)) continue
+    const group = resolveGroup(c)
+    if (group.isHustle) continue
     const cluster = c.category_cluster ?? classifyCourse(c.title, c.category_text)
-    const providerName = grp(c.provider_name)
-    const byProvider = clusterCompetitorRuns.get(cluster) ?? new Map<string, number>()
-    byProvider.set(providerName, (byProvider.get(providerName) ?? 0) + (c.upcoming_run_count ?? 0))
+    const byProvider = clusterCompetitorRuns.get(cluster) ?? new Map<string, { name: string; runs: number }>()
+    const existing = byProvider.get(group.key)
+    const runs = (existing?.runs ?? 0) + (c.upcoming_run_count ?? 0)
+    byProvider.set(group.key, { name: group.name, runs })
     clusterCompetitorRuns.set(cluster, byProvider)
   }
   const categoryClusters = Array.from(clusterMap.values()).map(agg => {
     const byProvider = clusterCompetitorRuns.get(agg.cluster)
     let best: { name: string; runs: number } | null = null
     if (byProvider) {
-      for (const [name, runs] of byProvider.entries()) {
+      for (const { name, runs } of byProvider.values()) {
         if (!best || runs > best.runs) best = { name, runs }
       }
     }
@@ -237,10 +253,12 @@ async function getData() {
     lastScraped,
     totalCourses: courses.length,
     totalEntities: activeRows.length,
-    debugCourses,
+    debugCourses: validationCourses,
+    validationLabel,
     categoryClusters,
     newCourses,
     recentlyDeactivated,
+    resolveGroup,
   }
 }
 
@@ -266,7 +284,7 @@ export default async function CourseIntelligencePage() {
     )
   }
 
-  const { rows, maxRuns, hasRunData, lastScraped, totalCourses, totalEntities, debugCourses, categoryClusters, newCourses, recentlyDeactivated } = d
+  const { rows, maxRuns, hasRunData, lastScraped, totalCourses, totalEntities, debugCourses, validationLabel, categoryClusters, newCourses, recentlyDeactivated, resolveGroup } = d
   const { date, time } = fmtDT(lastScraped)
   const podium = rows.slice(0, 3)
 
@@ -321,7 +339,7 @@ export default async function CourseIntelligencePage() {
         <div className="grid grid-cols-3 gap-3">
           {podium.map((r, i) => {
             const dmnd = demand(r.topRuns)
-            const c = color(r.name)
+            const c = r.color
             const icons = ['🏆', '🥈', '🥉']
             const sizes = ['text-5xl', 'text-4xl', 'text-4xl']
             const borders = [
@@ -330,7 +348,7 @@ export default async function CourseIntelligencePage() {
               'border-orange-800/40 bg-orange-950/15',
             ]
             return (
-              <div key={r.name} className={`rounded-xl border ${borders[i]} p-5 flex flex-col gap-2`}>
+              <div key={r.key} className={`rounded-xl border ${borders[i]} p-5 flex flex-col gap-2`}>
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-mono text-slate-500 tracking-wider">
                     #{i + 1} HIGHEST DEMAND
@@ -368,6 +386,7 @@ export default async function CourseIntelligencePage() {
             )
           })}
         </div>
+        <p className="text-[11px] text-slate-500 -mt-3">Source: MySkillsFuture API + run scraper</p>
 
         {/* ══ LEADERBOARD ══ */}
         <div className="rounded-xl border border-slate-800/60 overflow-hidden">
@@ -380,14 +399,14 @@ export default async function CourseIntelligencePage() {
 
           {rows.map((r, i) => {
             const dmnd = demand(r.topRuns)
-            const c = color(r.name)
+            const c = r.color
             const barPct = maxRuns > 0 ? Math.max(1, Math.round((r.topRuns / maxRuns) * 100)) : 0
             const barColor = r.topRuns >= 20 ? '#ef4444' : r.topRuns >= 5 ? '#f59e0b' : '#475569'
             const medianFee = median(r.fees)
 
             return (
               <details
-                key={r.name}
+                key={r.key}
                 className="group border-b border-slate-800/40 last:border-0"
               >
                 <summary className="grid grid-cols-[2.5rem_1fr_auto] items-center px-5 py-3.5 gap-4 cursor-pointer list-none [&::-webkit-details-marker]:hidden hover:bg-slate-800/30 transition-colors select-none">
@@ -568,7 +587,7 @@ export default async function CourseIntelligencePage() {
                       <a href={SF_URL(c.sf_ref_no)} target="_blank" rel="noopener noreferrer" className="text-xs text-slate-200 hover:text-emerald-400 transition-colors line-clamp-1">
                         {c.title} ↗
                       </a>
-                      <div className="text-[10px] text-slate-600 font-mono mt-0.5">{grp(c.provider_name)}</div>
+                      <div className="text-[10px] text-slate-600 font-mono mt-0.5">{resolveGroup(c).name}</div>
                     </div>
                     <span className="text-[10px] text-slate-500 font-mono shrink-0">
                       {c.first_seen_at ? new Date(c.first_seen_at).toLocaleDateString('en-SG', { day: '2-digit', month: 'short' }) : '—'}
@@ -593,7 +612,7 @@ export default async function CourseIntelligencePage() {
                       <a href={SF_URL(c.sf_ref_no)} target="_blank" rel="noopener noreferrer" className="text-xs text-slate-400 hover:text-red-400 transition-colors line-clamp-1">
                         {c.title} ↗
                       </a>
-                      <div className="text-[10px] text-slate-600 font-mono mt-0.5">{grp(c.provider_name)}</div>
+                      <div className="text-[10px] text-slate-600 font-mono mt-0.5">{resolveGroup(c).name}</div>
                     </div>
                     <span className="text-[10px] text-slate-500 font-mono shrink-0">
                       {c.last_seen_at ? new Date(c.last_seen_at).toLocaleDateString('en-SG', { day: '2-digit', month: 'short' }) : '—'}
@@ -605,12 +624,12 @@ export default async function CourseIntelligencePage() {
           </div>
         </div>
 
-        {/* ══ VALIDATION DEBUG TABLE ══ */}
+        {/* ══ VALIDATION SAMPLE ══ */}
         <details className="group rounded-xl border border-slate-800/60 overflow-hidden">
           <summary className="flex items-center justify-between px-5 py-3 bg-slate-900/60 cursor-pointer list-none [&::-webkit-details-marker]:hidden hover:bg-slate-800/40 transition-colors select-none">
             <div className="flex items-center gap-2">
-              <span className="text-[10px] font-mono text-slate-400 tracking-widest uppercase">🔬 Validation Debug Table</span>
-              <span className="text-[10px] font-mono text-slate-600">Hustle · ASK · BELLS · Equinet · Vertical</span>
+              <span className="text-[10px] font-mono text-slate-400 tracking-widest uppercase">🔬 Validation Sample</span>
+              <span className="text-[10px] font-mono text-slate-600">{validationLabel}</span>
             </div>
             <span className="text-slate-700 text-[10px] font-mono group-open:rotate-180 transition-transform">▾</span>
           </summary>
@@ -630,8 +649,9 @@ export default async function CourseIntelligencePage() {
               </thead>
               <tbody>
                 {debugCourses.map((c, idx) => {
-                  const provName = grp(c.provider_name)
-                  const clr = color(provName)
+                  const group = resolveGroup(c)
+                  const provName = group.name
+                  const clr = group.color
                   const runs = c.upcoming_run_count ?? 0
                   const att  = c.respondent_count ?? 0
                   const isZero = runs === 0
@@ -703,6 +723,12 @@ export default async function CourseIntelligencePage() {
           </div>
         </details>
 
+        {/* ══ DATA SOURCES ══ */}
+        <SourcePanel
+          module="course_intelligence"
+          extraLines={[`Cached in Supabase — ${totalCourses.toLocaleString()} course records`]}
+        />
+
         {/* ══ FOOTER ══ */}
         <footer className="text-[10px] font-mono text-slate-700 space-y-0.5 pb-4">
           <p>
@@ -712,7 +738,7 @@ export default async function CourseIntelligencePage() {
           <p>
             HUSTLE SG = HUSTLE INSTITUTE PTE. LTD. + HUSTLE ACADEMY PTE. LTD. ·{' '}
             {totalCourses} courses indexed · Attended = Course_Quality_NumberOfRespondents ·
-            Run Count = 0 courses hidden from leaderboard (shown greyed in debug table)
+            Run Count = 0 courses hidden from leaderboard (shown greyed in validation sample)
           </p>
         </footer>
 

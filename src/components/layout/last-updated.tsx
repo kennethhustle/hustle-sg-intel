@@ -24,11 +24,36 @@ interface ModuleStatusRow {
   last_error: string | null
 }
 
+export interface SourceCounts {
+  working: number
+  partial: number
+  unavailable: number
+  manual: number
+  not_configured: number
+}
+
+export interface ConfidenceBreakdownRow {
+  module: string
+  label: string
+  level: 'high' | 'medium' | 'low'
+  score: number
+  reason: string
+}
+
+export interface DataConfidenceSummary {
+  score: number
+  breakdown: ConfidenceBreakdownRow[]
+}
+
 export interface RefreshStatusResponse {
   overall: OverallHealth
   modules: ModuleStatusRow[]
   running: RunningJob[]
   last_updated: string | null
+  /** Per-source rollup counts — added alongside the data-sources transparency UI. */
+  sources?: SourceCounts
+  /** Overall data confidence score + per-module breakdown. */
+  confidence?: DataConfidenceSummary
 }
 
 type LoadState = 'loading' | 'error' | 'no-session' | 'ready'

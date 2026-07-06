@@ -16,6 +16,7 @@
 import chromium from '@sparticuz/chromium'
 import puppeteer, { type Browser, type HTTPRequest } from 'puppeteer-core'
 import { createServiceClient } from '@/lib/supabase/server'
+import { reportSourceSuccess, reportSourceFailure } from '@/lib/services/data-sources'
 
 const COURSES_PER_PROVIDER = 5
 const BATCH_SIZE = 3
@@ -171,12 +172,19 @@ export async function scrapeAndUpdateRunCounts(competitorId?: string): Promise<R
   console.log(`Scraping ${selectedCourses.length} courses across ${providerCounts.size} providers`)
 
   // Launch headless Chrome
-  const browser = await puppeteer.launch({
-    args: chromium.args,
-    defaultViewport: chromium.defaultViewport,
-    executablePath: await chromium.executablePath(),
-    headless: chromium.headless,
-  })
+  let browser: Browser
+  try {
+    browser = await puppeteer.launch({
+      args: chromium.args,
+      defaultViewport: chromium.defaultViewport,
+      executablePath: await chromium.executablePath(),
+      headless: chromium.headless,
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    await reportSourceFailure('mysf_run_scraper', `Browser launch failed: ${message}`, false)
+    throw err
+  }
 
   const allResults: RunCountResult[] = []
 
@@ -216,6 +224,23 @@ export async function scrapeAndUpdateRunCounts(competitorId?: string): Promise<R
 
   // Rebuild provider_top_runs table
   await rebuildProviderTopRuns(supabase)
+
+  // Report source health: partial when some URLs errored, failed when all
+  // did, success otherwise. Never let this throw or block the return.
+  try {
+    const errorCount = allResults.filter((r) => r.error !== null).length
+    if (allResults.length > 0 && errorCount === allResults.length) {
+      const message = allResults.map((r) => `${r.sf_ref_no}: ${r.error}`).join(' | ')
+      await reportSourceFailure('mysf_run_scraper', message, false)
+    } else if (errorCount > 0) {
+      const message = allResults.filter((r) => r.error).map((r) => `${r.sf_ref_no}: ${r.error}`).join(' | ')
+      await reportSourceFailure('mysf_run_scraper', message, true)
+    } else {
+      await reportSourceSuccess('mysf_run_scraper', { fetched: allResults.length, updated })
+    }
+  } catch (err) {
+    console.error('Failed to report mysf_run_scraper source status:', err)
+  }
 
   return {
     scraped: allResults.length,

@@ -1,7 +1,7 @@
 import { AppLayout } from '@/components/layout/app-layout'
 import { createClient } from '@/lib/supabase/server'
 import { formatRelativeTime, getPlatformLabel, cn } from '@/lib/utils'
-import { Clock, Database, Globe, User, Shield, Users, ArrowRight } from 'lucide-react'
+import { Clock, Database, Globe, User, Shield, Users, ArrowRight, Radio } from 'lucide-react'
 import type { Platform, UserRole } from '@/lib/types'
 import { ChangePasswordForm } from './change-password-form'
 import { DataRefreshPanel } from './data-refresh-panel'
@@ -92,6 +92,27 @@ export default async function SettingsPage() {
   return (
     <AppLayout title="Settings">
       <div className="space-y-6 max-w-5xl">
+        {/* Data Source Transparency */}
+        <section className="bg-slate-900/60 border border-indigo-800/30 rounded-xl p-5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Radio className="h-4 w-4 text-indigo-400" />
+              <h2 className="text-sm font-semibold text-white">Data Sources</h2>
+            </div>
+            <a
+              href="/settings/data-sources"
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-400 text-xs font-medium rounded-lg border border-indigo-700/40 transition-colors"
+            >
+              View All Sources <ArrowRight className="h-3 w-3" />
+            </a>
+          </div>
+          <p className="text-xs text-slate-500 mt-2">
+            See every API, scraper, and manual data source powering this app — status, reliability, last
+            success time, and API key configuration. Admins can test connections, trigger refreshes, and
+            enable/disable sources.
+          </p>
+        </section>
+
         {/* Manual Intelligence Refresh */}
         <DataRefreshPanel role={role} />
 

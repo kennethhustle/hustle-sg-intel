@@ -1,6 +1,7 @@
 import { createServiceClient } from '@/lib/supabase/server'
 import { scrapeSkillsFutureByProvider, type SFCourse } from '@/lib/services/courses/skillsfuture_v2'
 import { classifyCourse } from '@/lib/services/courses/categories'
+import { reportSourceSuccess, reportSourceFailure } from '@/lib/services/data-sources'
 
 export interface SFIngestionResult {
   competitor_name: string
@@ -173,6 +174,23 @@ export async function ingestAllSFCourses(competitorId?: string): Promise<SFInges
   const { data: deactivatedRows, error: deactivateErr } = await deactivateQuery.select('sf_ref_no')
   if (!deactivateErr) {
     deactivated = deactivatedRows?.length ?? 0
+  }
+
+  // Report source health: failure only if ALL providers errored, partial if
+  // some did, success otherwise. Never let this throw or block the return.
+  try {
+    const errored = results.filter((r) => r.error !== null)
+    if (providers.length > 0 && errored.length === providers.length) {
+      const message = errored.map((r) => `${r.competitor_name}: ${r.error}`).join(' | ')
+      await reportSourceFailure('myskillsfuture_api', message, false)
+    } else if (errored.length > 0) {
+      const message = errored.map((r) => `${r.competitor_name}: ${r.error}`).join(' | ')
+      await reportSourceFailure('myskillsfuture_api', message, true)
+    } else {
+      await reportSourceSuccess('myskillsfuture_api', { fetched: totalFound, updated: totalUpserted })
+    }
+  } catch (err) {
+    console.error('Failed to report myskillsfuture_api source status:', err)
   }
 
   return {

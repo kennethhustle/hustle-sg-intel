@@ -1,6 +1,7 @@
 import { createServiceClient } from '@/lib/supabase/server'
 import { scrapeSkillsFuture } from '@/lib/services/courses/skillsfuture'
 import { scrapeCompanyCourses } from '@/lib/services/courses/company_courses'
+import { reportSourceSuccess, reportSourceFailure } from '@/lib/services/data-sources'
 
 interface CourseIngestionResult {
   competitor_id: string
@@ -95,6 +96,28 @@ export async function ingestAllCourses(competitorId?: string): Promise<OverallCo
     })
     totalInserted += companyInserted
     await delay(2000)
+  }
+
+  // Report source health for the company website scraper specifically
+  // (the 'skillsfuture' source in this file is reported separately under
+  // myskillsfuture_api by ingestion/sf_courses.ts).
+  try {
+    const companyResults = allResults.filter((r) => r.source === 'company_website')
+    const errored = companyResults.filter((r) => r.error !== null)
+    const fetched = companyResults.reduce((sum, r) => sum + r.courses_found, 0)
+    const updated = companyResults.reduce((sum, r) => sum + r.courses_inserted, 0)
+
+    if (companyResults.length > 0 && errored.length === companyResults.length) {
+      const message = errored.map((r) => `${r.competitor_name}: ${r.error}`).join(' | ')
+      await reportSourceFailure('company_courses_scraper', message, false)
+    } else if (errored.length > 0) {
+      const message = errored.map((r) => `${r.competitor_name}: ${r.error}`).join(' | ')
+      await reportSourceFailure('company_courses_scraper', message, true)
+    } else {
+      await reportSourceSuccess('company_courses_scraper', { fetched, updated })
+    }
+  } catch (err) {
+    console.error('Failed to report company_courses_scraper source status:', err)
   }
 
   return {

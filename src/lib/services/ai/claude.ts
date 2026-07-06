@@ -139,6 +139,12 @@ ${JSON.stringify(payload.alertsAndChanges, null, 2)}
 DATA FRESHNESS BY MODULE:
 ${JSON.stringify(payload.dataFreshness, null, 2)}
 
+DATA SOURCE OPERATIONAL STATUS (you are given the operational status of every data source — see rules below):
+${JSON.stringify(payload.sourceStatus, null, 2)}
+
+DATA INTENTIONALLY WEAK OR ABSENT RIGHT NOW (excluded/limited data — do not fill these gaps with speculation):
+${JSON.stringify(payload.excludedData, null, 2)}
+
 ${opportunitySection}
 
 TITLES ALREADY USED IN THE LAST 3 DAYS (do NOT repeat or closely rephrase any of these):
@@ -149,7 +155,7 @@ Return a JSON array of insight objects. Each object must have exactly these fiel
 - title: string, max 80 characters, action-oriented
 - body: string, 100-250 words, MUST cite actual numbers from the data above
 - severity: one of ${JSON.stringify(ALLOWED_SEVERITIES)}
-- confidence: one of ${JSON.stringify(ALLOWED_CONFIDENCE)} — reflect the quality/staleness/completeness of the underlying data
+- confidence: one of ${JSON.stringify(ALLOWED_CONFIDENCE)} — reflect the quality/staleness/completeness of the underlying data AND the reliability of the data sources backing this insight (per DATA SOURCE OPERATIONAL STATUS above): insights built on high-reliability, working sources should be 'high' confidence; insights leaning on medium-reliability, partial, or manual/static sources should be 'medium' at best; insights that can only be supported by low-reliability or stale sources should be 'low'
 - evidence: array of 2-5 short bullet strings, each citing a specific data point (a number, a name, a date)
 - recommended_action: string, 1-2 sentences, concrete and specific
 - suggested_owner: one of ${JSON.stringify(ALLOWED_OWNERS)}
@@ -167,6 +173,14 @@ Strict rules:
 - Do NOT repeat any title (or a close rephrasing of one) from the TITLES ALREADY USED list above.
 - Only reference competitors, numbers, and categories that actually appear in the data provided.
 - Focus on actionable, specific intelligence — not generic advice.
+
+You are given the operational status of every data source (see DATA SOURCE OPERATIONAL STATUS above). Rules for using it:
+- Never make claims based on sources marked unavailable, failed, or not_configured.
+- Treat manual and static_snapshot data as point-in-time estimates and say so explicitly when citing them (e.g. "as of [date]", "manually verified on [date]").
+- Prioritise insights backed by high-reliability, working sources.
+- Use low-reliability data only as supporting context, not as the sole basis for an insight.
+- If the data backing a potential insight is stale (is_stale: true), either lower that insight's confidence to 'low' or skip the insight entirely.
+- Explicitly mention data limitations in the body where relevant, especially for anything listed under DATA INTENTIONALLY WEAK OR ABSENT RIGHT NOW.
 
 ${extraInstruction ?? ''}
 

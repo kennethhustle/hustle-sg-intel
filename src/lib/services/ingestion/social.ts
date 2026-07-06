@@ -5,6 +5,7 @@ import { scrapeFacebook } from '@/lib/services/social/facebook'
 import { scrapeLinkedIn } from '@/lib/services/social/linkedin'
 import { scrapeTikTok } from '@/lib/services/social/tiktok'
 import type { Platform } from '@/lib/types'
+import { reportSourceSuccess, reportSourceFailure, updateSourceStatus } from '@/lib/services/data-sources'
 
 interface IngestionResult {
   competitor_id: string
@@ -158,6 +159,54 @@ export async function ingestAllSocial(competitorId?: string): Promise<OverallRes
       // Rate limiting — be respectful to target sites
       await delay(1500)
     }
+  }
+
+  // Report per-platform source health, aggregated across all competitors,
+  // plus a separate check for any manually verified social entries. Never
+  // let this throw or block the return.
+  try {
+    const sourceKeyByPlatform: Record<string, string> = {
+      youtube: 'youtube_api',
+      facebook: 'facebook_scraper',
+      instagram: 'instagram_scraper',
+      linkedin: 'linkedin_scraper',
+      tiktok: 'tiktok_scraper',
+    }
+
+    for (const [platform, sourceKey] of Object.entries(sourceKeyByPlatform)) {
+      const platformResults = results.filter((r) => r.platform === platform)
+      if (platformResults.length === 0) continue
+
+      const succeeded = platformResults.filter((r) => r.success)
+      const failed = platformResults.filter((r) => !r.success)
+
+      if (failed.length === 0) {
+        await reportSourceSuccess(sourceKey, { fetched: platformResults.length, updated: succeeded.length })
+      } else if (succeeded.length === 0) {
+        // All attempts for this platform failed — spec calls for 'unavailable'
+        // specifically rather than the generic reportSourceFailure 'failed'.
+        await updateSourceStatus(sourceKey, {
+          status: 'unavailable',
+          error_message: 'Scraping blocked — unable to parse follower count',
+          last_failed_at: new Date().toISOString(),
+        })
+      } else {
+        const message = failed[0].error ?? 'Some competitors failed'
+        await reportSourceFailure(sourceKey, message, true)
+      }
+    }
+
+    const { data: manualRows } = await supabase
+      .from('social_snapshots')
+      .select('id')
+      .eq('data_source', 'verified_manual')
+
+    if (manualRows && manualRows.length > 0) {
+      await reportSourceSuccess('social_manual', { fetched: manualRows.length })
+    }
+    // else: leave social_manual untouched entirely, per spec.
+  } catch (err) {
+    console.error('Failed to report social source statuses:', err)
   }
 
   return {

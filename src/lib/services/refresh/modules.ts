@@ -20,6 +20,7 @@ import { generateDataAlerts } from '@/lib/services/alerts/generate'
 import { buildIntelligencePayload } from '@/lib/services/ai/payload'
 import { computeOpportunityScores } from '@/lib/services/scoring/opportunity'
 import { generateStrategicInsights } from '@/lib/services/ai/claude'
+import { reportSourceSuccess, reportSourceFailure } from '@/lib/services/data-sources'
 
 type SupabaseClient = Awaited<ReturnType<typeof createServiceClient>>
 
@@ -148,6 +149,12 @@ export async function runAiInsightsFlow(supabase: SupabaseClient): Promise<AiIns
       throw new Error(`Failed to insert insights: ${insertError.message}`)
     }
 
+    try {
+      await reportSourceSuccess('claude_api', { updated: inserted?.length ?? 0 })
+    } catch (err) {
+      console.error('Failed to report claude_api source status:', err)
+    }
+
     return {
       status: 'success',
       counts: { inserted: (inserted?.length ?? 0) + scoresResult.persisted },
@@ -155,6 +162,13 @@ export async function runAiInsightsFlow(supabase: SupabaseClient): Promise<AiIns
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
+
+    try {
+      await reportSourceFailure('claude_api', message, false)
+    } catch (reportErr) {
+      console.error('Failed to report claude_api source status:', reportErr)
+    }
+
     return {
       status: 'partial',
       counts: { inserted: scoresResult.persisted },

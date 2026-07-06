@@ -21,6 +21,7 @@ import { createClient } from '@/lib/supabase/server'
 import { RefreshStatus } from '@/components/marketing/refresh-status'
 import type { RefreshLog } from '@/components/marketing/refresh-status'
 import { DataSourceBadge } from '@/components/dashboard/data-source-badge'
+import { SourcePanel } from '@/components/dashboard/source-panel'
 
 export const revalidate = 300
 
@@ -339,6 +340,9 @@ export default async function PerformanceIntelligencePage() {
             </div>
             <p className="text-3xl font-black text-red-400 mb-0.5">{topMetaBuyer.metaAds}</p>
             <p className="text-xs text-slate-500">active Meta ads</p>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              Source: Meta Ad Library API · cached {lastSuccessfulLog?.completed_at ? new Date(lastSuccessfulLog.completed_at).toLocaleDateString('en-SG', { day: 'numeric', month: 'short' }) : 'pending refresh'}
+            </p>
             {hustle && (
               <div className="mt-3 pt-3 border-t border-slate-800 text-[11px] text-slate-400">
                 Hustle: <span className="text-white font-bold">{hustle.metaAds} ads</span> — rank <span className="text-indigo-400 font-bold">#{hustle.metaRank}</span>
@@ -357,6 +361,9 @@ export default async function PerformanceIntelligencePage() {
             </div>
             <p className="text-3xl font-black text-blue-400 mb-0.5">~{topGoogleAds.googleAds}</p>
             <p className="text-xs text-slate-500">estimated Google ads</p>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              Source: Manual snapshot · verified {topGoogleAds.googleAdsVerifiedAt ? new Date(topGoogleAds.googleAdsVerifiedAt).toLocaleDateString('en-SG', { day: 'numeric', month: 'short', year: 'numeric' }) : 'not verified'}
+            </p>
             {hustle && (
               <div className="mt-3 pt-3 border-t border-slate-800 text-[11px] text-slate-400">
                 Hustle: <span className="text-white font-bold">~{hustle.googleAds} ads</span> — rank <span className="text-indigo-400 font-bold">#{hustle.googleAdsRank}</span>
@@ -375,6 +382,7 @@ export default async function PerformanceIntelligencePage() {
             </div>
             <p className="text-3xl font-black text-yellow-400 mb-0.5">{topReviews.googleReviews.toLocaleString()}</p>
             <p className="text-xs text-slate-500">{topReviews.googleRating} ★ Google rating</p>
+            <p className="text-[11px] text-slate-500 mt-0.5">Source: Google Places API · cached</p>
             {topReviews.reviewDelta30d != null && (
               <p className={`text-[11px] mt-0.5 font-mono ${topReviews.reviewDelta30d > 0 ? 'text-emerald-400' : 'text-slate-500'}`}>
                 {topReviews.reviewDelta30d > 0 ? '+' : ''}{topReviews.reviewDelta30d} since first snapshot
@@ -733,6 +741,8 @@ export default async function PerformanceIntelligencePage() {
             </div>
           )}
         </Section>
+
+        <SourcePanel module="marketing_intelligence" />
 
         <div className="text-[10px] text-slate-700 flex flex-wrap gap-4 pb-2">
           <a href="https://www.facebook.com/ads/library/?active_status=active&ad_type=all&country=SG" target="_blank" rel="noopener noreferrer" className="hover:text-slate-500 transition-colors">Meta Ads: Meta Ad Library (auto-refreshed 00:25 SGT daily)</a>

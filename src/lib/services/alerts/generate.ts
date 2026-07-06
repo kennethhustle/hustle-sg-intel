@@ -12,6 +12,7 @@
  * spam duplicate alerts.
  */
 import { createServiceClient } from '@/lib/supabase/server'
+import { updateSourceStatus } from '@/lib/services/data-sources'
 
 type SupabaseClient = Awaited<ReturnType<typeof createServiceClient>>
 
@@ -22,7 +23,12 @@ export interface GenerateAlertsResult {
 const DEDUP_WINDOW_DAYS = 3
 const NEW_COURSE_WINDOW_DAYS = 2
 const STALE_HOURS = 48
-const GOOGLE_ADS_STALE_DAYS = 30
+// Manual/static source staleness thresholds — differentiated per source.
+// Google Ads Transparency has no public API and is the highest-priority
+// manual source to keep fresh, so it gets a tighter window than the other
+// manual sources (social_manual, seo_manual_snapshot), which stay at 30 days.
+const GOOGLE_ADS_STALE_DAYS = 14
+const MANUAL_SOURCE_STALE_DAYS = 30
 
 interface NewAlert {
   competitor_id: string | null
@@ -383,6 +389,15 @@ async function ruleDataQuality(supabase: SupabaseClient): Promise<NewAlert[]> {
         })
       }
     }
+  }
+
+  // google_ads_transparency is permanently 'manual_only' — never mark it
+  // working/failed/partial. Just bump the checked timestamp so the data
+  // source registry reflects that we looked at it during this alert pass.
+  try {
+    await updateSourceStatus('google_ads_transparency', { last_checked_at: new Date().toISOString() })
+  } catch (err) {
+    console.error('Failed to bump google_ads_transparency last_checked_at:', err)
   }
 
   // Manual Google Ads verification overdue

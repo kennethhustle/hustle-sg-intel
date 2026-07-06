@@ -3,6 +3,7 @@ import { scrapeMyCareersFuture } from '@/lib/services/jobs/mycareersfuture'
 import { scrapeJobStreet } from '@/lib/services/jobs/jobstreet'
 import { scrapeIndeed } from '@/lib/services/jobs/indeed'
 import { scrapeCareerPage } from '@/lib/services/jobs/career_pages'
+import { reportSourceSuccess, reportSourceFailure } from '@/lib/services/data-sources'
 
 interface JobIngestionResult {
   competitor_id: string
@@ -138,6 +139,39 @@ export async function ingestAllJobs(competitorId?: string): Promise<OverallJobRe
     })
     totalInserted += indeedIngested
     await delay(3000)
+  }
+
+  // Report per-source health, aggregated across all competitors. Never let
+  // this throw or block the return.
+  try {
+    const sourceKeyByResultSource: Record<string, string> = {
+      mycareersfuture: 'mycareersfuture_api',
+      jobstreet: 'jobstreet_scraper',
+      indeed: 'indeed_scraper',
+      career_page: 'career_pages_scraper',
+    }
+
+    for (const [resultSource, sourceKey] of Object.entries(sourceKeyByResultSource)) {
+      const sourceResults = allResults.filter((r) => r.source === resultSource)
+      if (sourceResults.length === 0) continue
+
+      const succeeded = sourceResults.filter((r) => r.error === null)
+      const failed = sourceResults.filter((r) => r.error !== null)
+      const fetched = sourceResults.reduce((sum, r) => sum + r.jobs_found, 0)
+      const inserted = sourceResults.reduce((sum, r) => sum + r.jobs_inserted, 0)
+
+      if (failed.length === 0) {
+        await reportSourceSuccess(sourceKey, { fetched, updated: inserted })
+      } else if (succeeded.length === 0) {
+        const message = failed[0].error ?? 'All competitors failed'
+        await reportSourceFailure(sourceKey, message, false)
+      } else {
+        const message = failed[0].error ?? 'Some competitors failed'
+        await reportSourceFailure(sourceKey, message, true)
+      }
+    }
+  } catch (err) {
+    console.error('Failed to report hiring source statuses:', err)
   }
 
   return {

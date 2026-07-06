@@ -2,6 +2,7 @@ import { AppLayout } from '@/components/layout/app-layout'
 import { CompetitorBadge } from '@/components/dashboard/competitor-badge'
 import { DataUnavailable } from '@/components/dashboard/data-unavailable'
 import { ModuleStatus } from '@/components/dashboard/module-status'
+import { SourcePanel } from '@/components/dashboard/source-panel'
 import { createClient } from '@/lib/supabase/server'
 import { formatDate, formatRelativeTime, formatCurrency } from '@/lib/utils'
 import { ExternalLink, Briefcase } from 'lucide-react'
@@ -174,6 +175,8 @@ export default async function HiringIntelligencePage() {
           </div>
         </div>
       </div>
+
+      <SourcePanel module="hiring_intelligence" extraLines={[`Cached in Supabase — ${jobs.length.toLocaleString()} job postings`]} className="mb-6" />
 
       {/* Job Postings Table */}
       <div className="bg-slate-900/60 border border-slate-800 rounded-xl overflow-hidden">
