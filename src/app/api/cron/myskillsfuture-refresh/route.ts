@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/server'
+import { startRefreshLog } from '@/lib/services/refresh-log'
 
 export const maxDuration = 300
 
@@ -401,44 +402,6 @@ async function stepAlerts(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// STEP 7: Log to data_refresh_logs
-// ─────────────────────────────────────────────────────────────────────────────
-
-async function stepLog(
-  supabase: Awaited<ReturnType<typeof createServiceClient>>,
-  snapshotDate: string,
-  status: 'success' | 'error',
-  counts: {
-    rows_collected: number
-    rows_inserted: number
-    changes_detected: number
-    alerts_generated: number
-    duration_ms: number
-    error_message?: string
-  }
-): Promise<void> {
-  const { error } = await supabase.from('data_refresh_logs').insert({
-    source: 'myskillsfuture',
-    status,
-    snapshot_date: snapshotDate,
-    rows_collected: counts.rows_collected,
-    rows_inserted: counts.rows_inserted,
-    rows_updated: 0,
-    changes_detected: counts.changes_detected,
-    alerts_generated: counts.alerts_generated,
-    duration_ms: counts.duration_ms,
-    error_message: counts.error_message ?? null,
-    metadata: { pipeline: 'steps_3_to_7' },
-    started_at: new Date(Date.now() - counts.duration_ms).toISOString(),
-    completed_at: new Date().toISOString(),
-  })
-
-  if (error) {
-    console.error('Failed to write data_refresh_logs:', error.message)
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // MAIN HANDLER
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -451,6 +414,7 @@ export async function GET(request: Request) {
   const startTime = Date.now()
   const snapshotDate = new Date().toISOString().split('T')[0]
   const supabase = await createServiceClient()
+  const log = await startRefreshLog('sf_courses', 'myskillsfuture-refresh', 'cron')
 
   try {
     // Load all current courses from sf_courses
@@ -461,6 +425,7 @@ export async function GET(request: Request) {
 
     if (coursesErr) throw new Error(`Failed to load sf_courses: ${coursesErr.message}`)
     if (!courses || courses.length === 0) {
+      await log.finalize('failed', { fetched: 0 }, 'sf_courses is empty — run sf-refresh first')
       return NextResponse.json({ success: false, error: 'sf_courses is empty — run sf-refresh first' }, { status: 400 })
     }
 
@@ -483,13 +448,12 @@ export async function GET(request: Request) {
     const duration_ms = Date.now() - startTime
 
     // Step 7: Log success
-    await stepLog(supabase, snapshotDate, 'success', {
-      rows_collected,
-      rows_inserted: snapshotCount,
-      changes_detected: changesCount,
-      alerts_generated: alertsCount,
-      duration_ms,
-    })
+    await log.finalize(
+      'success',
+      { fetched: rows_collected, inserted: snapshotCount },
+      null,
+      { changes_detected: changesCount, alerts_generated: alertsCount, provider_summaries_written: summaryRows }
+    )
 
     return NextResponse.json({
       success: true,
@@ -511,14 +475,7 @@ export async function GET(request: Request) {
     const errorMessage = err instanceof Error ? err.message : String(err)
     console.error('myskillsfuture-refresh pipeline error:', errorMessage)
 
-    await stepLog(supabase, snapshotDate, 'error', {
-      rows_collected: 0,
-      rows_inserted: 0,
-      changes_detected: 0,
-      alerts_generated: 0,
-      duration_ms,
-      error_message: errorMessage,
-    })
+    await log.finalize('failed', undefined, errorMessage)
 
     return NextResponse.json(
       { success: false, error: errorMessage, duration_ms },

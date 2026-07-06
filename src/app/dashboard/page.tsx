@@ -2,8 +2,10 @@ import { AppLayout } from '@/components/layout/app-layout'
 import { MetricCard } from '@/components/dashboard/metric-card'
 import { CompetitorBadge } from '@/components/dashboard/competitor-badge'
 import { DataUnavailable } from '@/components/dashboard/data-unavailable'
+import { DataSourceBadge } from '@/components/dashboard/data-source-badge'
 import { SocialBarChart } from '@/components/charts/social-bar-chart'
 import { createClient } from '@/lib/supabase/server'
+import { getRefreshHealth } from '@/lib/services/refresh-log'
 import { formatNumber, formatRelativeTime, getSeverityBgClass, cn } from '@/lib/utils'
 import { Trophy, TrendingUp, Users, BookOpen, Bell, Building2, Zap } from 'lucide-react'
 import Link from 'next/link'
@@ -13,7 +15,7 @@ export const revalidate = 300 // Revalidate every 5 minutes
 async function getDashboardData() {
   const supabase = await createClient()
 
-  const [summaryRes, rankingRes, alertsRes, insightsRes, lastSocialRes] = await Promise.all([
+  const [summaryRes, rankingRes, alertsRes, insightsRes, lastSocialRes, refreshHealth] = await Promise.all([
     supabase.rpc('get_competitor_dashboard_summary'),
     supabase.rpc('get_social_ranking'),
     supabase
@@ -35,6 +37,7 @@ async function getDashboardData() {
       .order('scraped_at', { ascending: false })
       .limit(1)
       .maybeSingle(),
+    getRefreshHealth(),
   ])
 
   const summary = Array.isArray(summaryRes.data) ? summaryRes.data[0] : summaryRes.data
@@ -46,6 +49,7 @@ async function getDashboardData() {
     alerts: alertsRes.data ?? [],
     insights: insightsRes.data ?? [],
     lastUpdated: lastSocialRes.data?.scraped_at ?? null,
+    refreshHealth,
   }
 }
 
@@ -61,7 +65,7 @@ const insightTypeLabel: Record<string, string> = {
 }
 
 export default async function DashboardPage() {
-  const { summary, ranking, alerts, insights, lastUpdated } = await getDashboardData()
+  const { summary, ranking, alerts, insights, lastUpdated, refreshHealth } = await getDashboardData()
 
   // Build bar chart data from ranking
   const barChartData = ranking.map((r: {
@@ -83,16 +87,21 @@ export default async function DashboardPage() {
     <AppLayout title="Dashboard" lastUpdated={lastUpdated}>
       {/* KPI Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <MetricCard
-          label="Our Social Rank"
-          value={summary?.hustle_social_rank ?? null}
-          format="rank"
-          source="scraped"
-          lastUpdated={lastUpdated}
-          icon={<Trophy className="h-4 w-4" />}
-          highlight
-          suffix={` of ${summary?.total_competitors ?? 10}`}
-        />
+        <div className="relative">
+          <div className="absolute top-3 right-3 z-10">
+            <DataSourceBadge kind="cached" />
+          </div>
+          <MetricCard
+            label="Our Social Rank"
+            value={summary?.hustle_social_rank ?? null}
+            format="rank"
+            source="scraped"
+            lastUpdated={lastUpdated}
+            icon={<Trophy className="h-4 w-4" />}
+            highlight
+            suffix={` of ${summary?.total_competitors ?? 10}`}
+          />
+        </div>
         <MetricCard
           label="Total Social Reach"
           value={hustleEntry?.total_followers ?? null}
@@ -106,12 +115,62 @@ export default async function DashboardPage() {
           source="scraped"
           icon={<Users className="h-4 w-4" />}
         />
-        <MetricCard
-          label="Unread Alerts"
-          value={summary?.unread_alerts ?? null}
-          source="system"
-          icon={<Bell className="h-4 w-4" />}
-        />
+        <div className="relative">
+          <div className="absolute top-3 right-3 z-10">
+            <DataSourceBadge kind="cached" />
+          </div>
+          <MetricCard
+            label="Unread Alerts"
+            value={summary?.unread_alerts ?? null}
+            source="system"
+            icon={<Bell className="h-4 w-4" />}
+          />
+        </div>
+      </div>
+
+      {/* Refresh Health */}
+      <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-5 mb-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-sm font-semibold text-white">Refresh Health</h2>
+          <span className={cn(
+            'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-medium',
+            refreshHealth.overall === 'green'  ? 'bg-emerald-950/50 border-emerald-800/50 text-emerald-400' :
+            refreshHealth.overall === 'yellow' ? 'bg-yellow-950/50 border-yellow-800/50 text-yellow-400' :
+            refreshHealth.overall === 'red'    ? 'bg-red-950/50 border-red-800/50 text-red-400' :
+                                                  'bg-slate-800 border-slate-700 text-slate-500'
+          )}>
+            <span className={cn(
+              'w-1.5 h-1.5 rounded-full',
+              refreshHealth.overall === 'green'  ? 'bg-emerald-400' :
+              refreshHealth.overall === 'yellow' ? 'bg-yellow-400' :
+              refreshHealth.overall === 'red'    ? 'bg-red-400' : 'bg-slate-500'
+            )} />
+            {refreshHealth.overall === 'green' ? 'All systems healthy' :
+             refreshHealth.overall === 'yellow' ? 'Some modules stale' :
+             refreshHealth.overall === 'red' ? 'Refresh failure detected' : 'No refresh data'}
+          </span>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+          {refreshHealth.modules.map(m => {
+            const lastSuccessSgt = m.last_success_at
+              ? new Intl.DateTimeFormat('en-SG', { timeZone: 'Asia/Singapore', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false }).format(new Date(m.last_success_at)) + ' SGT'
+              : 'never'
+            const chipCls =
+              m.status === 'success'  ? 'bg-emerald-950/50 border-emerald-800/50 text-emerald-400' :
+              m.status === 'partial'  ? 'bg-yellow-950/50 border-yellow-800/50 text-yellow-400' :
+              m.status === 'failed'   ? 'bg-red-950/50 border-red-800/50 text-red-400' :
+              m.status === 'stale'    ? 'bg-orange-950/50 border-orange-800/50 text-orange-400' :
+              m.status === 'running'  ? 'bg-blue-950/50 border-blue-800/50 text-blue-400' :
+                                         'bg-slate-800 border-slate-700 text-slate-500'
+            return (
+              <div key={m.module} className={cn('rounded-lg border px-3 py-2', chipCls)}>
+                <p className="text-[10px] font-mono uppercase tracking-wide truncate">{m.module}</p>
+                <p className="text-[11px] font-semibold mt-0.5 capitalize">{m.status}</p>
+                <p className="text-[10px] opacity-70 mt-0.5">{lastSuccessSgt}</p>
+              </div>
+            )
+          })}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
@@ -218,7 +277,6 @@ export default async function DashboardPage() {
                 description: string | null
                 severity: string
                 created_at: string
-                competitors: { name: string; color: string } | null
               }) => (
                 <div
                   key={alert.id}
@@ -254,6 +312,7 @@ export default async function DashboardPage() {
             <div className="flex items-center gap-2">
               <Zap className="h-4 w-4 text-indigo-400" />
               <h2 className="text-sm font-semibold text-white">AI Strategic Insights</h2>
+              <DataSourceBadge kind="ai" />
             </div>
             <Link
               href="/opportunity-engine"

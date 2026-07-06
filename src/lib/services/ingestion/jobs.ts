@@ -23,24 +23,34 @@ function normalizeJobTitle(title: string): string {
   return title.toLowerCase().replace(/\s+/g, ' ').trim()
 }
 
-export async function ingestAllJobs(): Promise<OverallJobResult> {
+export async function ingestAllJobs(competitorId?: string): Promise<OverallJobResult> {
   const supabase = await createServiceClient()
 
-  const { data: competitors, error } = await supabase
+  let query = supabase
     .from('competitors')
     .select('id, name, website')
     .eq('active', true)
+    .is('archived_at', null)
+    .eq('track_hiring', true)
+
+  if (competitorId) query = query.eq('id', competitorId)
+
+  const { data: competitors, error } = await query
 
   if (error || !competitors) {
     throw new Error(`Failed to fetch competitors: ${error?.message}`)
   }
 
   // Mark all current jobs as inactive before re-scraping
-  await supabase
+  let staleJobsQuery = supabase
     .from('job_postings')
     .update({ is_active: false })
     .eq('is_active', true)
     .lt('scraped_at', new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
+
+  if (competitorId) staleJobsQuery = staleJobsQuery.eq('competitor_id', competitorId)
+
+  await staleJobsQuery
 
   const allResults: JobIngestionResult[] = []
   let totalInserted = 0

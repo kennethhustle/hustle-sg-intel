@@ -17,6 +17,24 @@
 
 import { createServiceClient } from '@/lib/supabase/server'
 
+// ─── Small retry helper ────────────────────────────────────────────────────────
+// Retries a failed fetch-like async call once after a short delay. Used for the
+// Meta Ad Library and Google Places calls, which occasionally fail transiently.
+async function fetchWithRetry<T>(
+  fn: () => Promise<T | null>,
+  retries = 1,
+  delayMs = 2000
+): Promise<T | null> {
+  let result = await fn()
+  let attempt = 0
+  while (result === null && attempt < retries) {
+    await new Promise((resolve) => setTimeout(resolve, delayMs))
+    result = await fn()
+    attempt++
+  }
+  return result
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface CompetitorRecord {
@@ -131,7 +149,8 @@ async function fetchGooglePlaces(
 // ─── Main refresh function ────────────────────────────────────────────────────
 
 export async function runMarketingRefresh(
-  triggeredBy: 'cron' | 'manual' = 'cron'
+  triggeredBy: 'cron' | 'manual' = 'cron',
+  competitorId?: string
 ): Promise<RefreshResult> {
   const supabase  = await createServiceClient()
   const startedAt = new Date().toISOString()
@@ -152,6 +171,7 @@ export async function runMarketingRefresh(
       started_at:   startedAt,
       status:       'running',
       triggered_by: triggeredBy,
+      competitor_id: competitorId ?? null,
     })
     .select('id')
     .single()
@@ -183,10 +203,16 @@ export async function runMarketingRefresh(
   }
 
   try {
-    const { data: competitors, error: compErr } = await supabase
+    let compQuery = supabase
       .from('competitors')
       .select('id, name')
       .eq('active', true)
+      .is('archived_at', null)
+      .eq('track_marketing', true)
+
+    if (competitorId) compQuery = compQuery.eq('id', competitorId)
+
+    const { data: competitors, error: compErr } = await compQuery
 
     if (compErr || !competitors?.length) {
       await finaliseLog('failed', compErr?.message ?? 'No competitors found')
@@ -208,14 +234,14 @@ export async function runMarketingRefresh(
 
     const { data: sfData } = await supabase
       .from('sf_courses')
-      .select('competitor_id, upcoming_run_count')
+      .select('competitor_id, upcoming_run_count, respondent_count')
 
     const sfMap = new Map<string, { runs: number; respondents: number }>()
     for (const row of (sfData ?? [])) {
       const ex = sfMap.get(row.competitor_id) ?? { runs: 0, respondents: 0 }
       sfMap.set(row.competitor_id, {
         runs:        ex.runs + (row.upcoming_run_count ?? 0),
-        respondents: ex.respondents,
+        respondents: ex.respondents + (row.respondent_count ?? 0),
       })
     }
 
@@ -233,7 +259,7 @@ export async function runMarketingRefresh(
         } catch { /* ignore */ }
       }
 
-      const metaCount = await fetchMetaAdsCount(metaSearchTerm)
+      const metaCount = await fetchWithRetry(() => fetchMetaAdsCount(metaSearchTerm))
       if (metaCount !== null) {
         update.meta_ads = metaCount
         result.meta_ads_updated++
@@ -241,7 +267,7 @@ export async function runMarketingRefresh(
         result.errors.push({ competitor: comp.name, field: 'meta_ads', error: 'API returned null' })
       }
 
-      const googleCount = await fetchGooglePlaces(`${comp.name} Singapore training`)
+      const googleCount = await fetchWithRetry(() => fetchGooglePlaces(`${comp.name} Singapore training`))
       if (googleCount !== null) {
         update.google_reviews = googleCount.reviews
         update.google_rating  = googleCount.rating
@@ -253,11 +279,14 @@ export async function runMarketingRefresh(
       const sf = sfMap.get(comp.id)
       if (sf) {
         update.sf_runs = sf.runs
+        update.sf_respondents = sf.respondents
         result.sf_updated++
       }
 
       updates.push(update)
     }
+
+    const snapshotDate = new Date().toISOString().split('T')[0]
 
     for (const upd of updates) {
       const payload: Record<string, unknown> = {
@@ -268,6 +297,7 @@ export async function runMarketingRefresh(
       if (upd.google_reviews !== undefined) payload.google_reviews = upd.google_reviews
       if (upd.google_rating  !== undefined) payload.google_rating  = upd.google_rating
       if (upd.sf_runs        !== undefined) payload.sf_runs        = upd.sf_runs
+      if (upd.sf_respondents !== undefined) payload.sf_respondents = upd.sf_respondents
 
       const { error: upsertErr } = await supabase
         .from('competitor_marketing_data')
@@ -280,6 +310,28 @@ export async function runMarketingRefresh(
           competitor: upd.competitor_id,
           field:      'upsert',
           error:      upsertErr.message,
+        })
+      }
+
+      // Daily history snapshot for trend/alert detection (marketing_snapshots).
+      const snapshotPayload: Record<string, unknown> = {
+        competitor_id: upd.competitor_id,
+        snapshot_date: snapshotDate,
+      }
+      if (upd.meta_ads       !== undefined) snapshotPayload.meta_ads       = upd.meta_ads
+      if (upd.google_reviews !== undefined) snapshotPayload.google_reviews = upd.google_reviews
+      if (upd.google_rating  !== undefined) snapshotPayload.google_rating  = upd.google_rating
+      if (upd.sf_runs        !== undefined) snapshotPayload.sf_runs        = upd.sf_runs
+
+      const { error: snapshotErr } = await supabase
+        .from('marketing_snapshots')
+        .upsert(snapshotPayload, { onConflict: 'competitor_id,snapshot_date' })
+
+      if (snapshotErr) {
+        result.errors.push({
+          competitor: upd.competitor_id,
+          field:      'marketing_snapshot',
+          error:      snapshotErr.message,
         })
       }
     }

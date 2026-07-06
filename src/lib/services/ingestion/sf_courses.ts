@@ -1,20 +1,6 @@
 import { createServiceClient } from '@/lib/supabase/server'
 import { scrapeSkillsFutureByProvider, type SFCourse } from '@/lib/services/courses/skillsfuture_v2'
-
-// Exact TP_ALIAS_Suggest names from the SkillsFuture Solr index
-const SF_PROVIDERS = [
-  { competitorName: 'BELLS Institute',    tpAliasName: 'BELLS INSTITUTE OF HIGHER LEARNING PTE. LTD.' },
-  { competitorName: 'Vertical Institute', tpAliasName: 'VERTICAL INSTITUTE PTE. LTD.' },
-  { competitorName: 'OOm Pte Ltd',        tpAliasName: 'OOM PTE. LTD.' },
-  { competitorName: 'Skills Dev Academy', tpAliasName: 'SKILLS DEVELOPMENT ACADEMY PTE. LTD.' },
-  { competitorName: 'InfoTech Academy',   tpAliasName: 'INFO-TECH SYSTEMS LTD.' },
-  { competitorName: 'ASK Training',       tpAliasName: '@ASK TRAINING PTE. LTD.' },
-  { competitorName: 'Heicoders Academy',  tpAliasName: 'HEICODERS ACADEMY PRIVATE LIMITED' },
-  { competitorName: 'Happy Together',     tpAliasName: 'HAPPY TOGETHER PTE. LTD.' },
-  { competitorName: 'Equinet Academy',    tpAliasName: 'EQUINET ACADEMY PRIVATE LIMITED' },
-  { competitorName: 'Hustle SG',          tpAliasName: 'HUSTLE INSTITUTE PTE. LTD.' },
-  { competitorName: 'Hustle SG',          tpAliasName: 'HUSTLE ACADEMY PTE. LTD.' },
-]
+import { classifyCourse } from '@/lib/services/courses/categories'
 
 export interface SFIngestionResult {
   competitor_name: string
@@ -32,24 +18,73 @@ export interface SFIngestionSummary {
   total_upserted: number
   results: SFIngestionResult[]
   started_at: string
+  deactivated: number
+}
+
+interface ProviderAlias {
+  competitorId: string
+  competitorName: string
+  tpAliasName: string
 }
 
 function delay(ms: number) { return new Promise<void>(resolve => setTimeout(resolve, ms)) }
 
-export async function ingestAllSFCourses(): Promise<SFIngestionSummary> {
+const STALE_DAYS = 3
+
+/**
+ * Load the MySkillsFuture provider aliases from competitor_data_sources,
+ * scoped to active, non-archived competitors that opt into course tracking.
+ * A competitor may have multiple aliases (e.g. Hustle SG); all are scraped
+ * and aggregated under the same competitor_id.
+ */
+async function loadProviderAliases(
+  supabase: Awaited<ReturnType<typeof createServiceClient>>,
+  competitorId?: string
+): Promise<ProviderAlias[]> {
+  let competitorQuery = supabase
+    .from('competitors')
+    .select('id, name')
+    .eq('active', true)
+    .is('archived_at', null)
+    .eq('track_courses', true)
+
+  if (competitorId) competitorQuery = competitorQuery.eq('id', competitorId)
+
+  const { data: competitors, error: compErr } = await competitorQuery
+  if (compErr) throw new Error(`Failed to fetch competitors: ${compErr.message}`)
+  if (!competitors || competitors.length === 0) return []
+
+  const competitorIds = competitors.map((c) => c.id)
+  const compMap = new Map(competitors.map((c) => [c.id, c.name as string]))
+
+  const { data: sources, error: srcErr } = await supabase
+    .from('competitor_data_sources')
+    .select('competitor_id, identifier')
+    .eq('source_type', 'myskillsfuture')
+    .eq('is_active', true)
+    .in('competitor_id', competitorIds)
+
+  if (srcErr) throw new Error(`Failed to fetch competitor_data_sources: ${srcErr.message}`)
+  if (!sources) return []
+
+  return sources.map((s) => ({
+    competitorId: s.competitor_id as string,
+    competitorName: compMap.get(s.competitor_id as string) ?? s.competitor_id as string,
+    tpAliasName: s.identifier as string,
+  }))
+}
+
+export async function ingestAllSFCourses(competitorId?: string): Promise<SFIngestionSummary> {
   const supabase = await createServiceClient()
   const started_at = new Date().toISOString()
 
-  const { data: competitors, error: compErr } = await supabase
-    .from('competitors').select('id, name').eq('active', true)
-  if (compErr || !competitors) throw new Error(`Failed to fetch competitors: ${compErr?.message}`)
+  const providers = await loadProviderAliases(supabase, competitorId)
 
-  const compMap = new Map(competitors.map(c => [c.name, c.id]))
   const results: SFIngestionResult[] = []
   let totalFound = 0, totalUpserted = 0
+  const seenAt = new Date().toISOString()
 
-  for (const provider of SF_PROVIDERS) {
-    const competitorId = compMap.get(provider.competitorName)
+  for (const provider of providers) {
     const scraped_at = new Date().toISOString()
     let courses: SFCourse[] = []
     let scrapeError: string | null = null
@@ -64,9 +99,9 @@ export async function ingestAllSFCourses(): Promise<SFIngestionSummary> {
       scrapeError = err instanceof Error ? err.message : String(err)
     }
 
-    if (courses.length > 0 && competitorId) {
+    if (courses.length > 0) {
       const rows = courses.map((c: SFCourse) => ({
-        competitor_id: competitorId,
+        competitor_id: provider.competitorId,
         sf_ref_no: c.sfRefNo,
         title: c.title,
         provider_name: c.providerName,
@@ -83,6 +118,12 @@ export async function ingestAllSFCourses(): Promise<SFIngestionSummary> {
         // MySkillsFuture session required) and must never be overwritten here.
         source_api_url: sourceUrl,
         scraped_at,
+        // Change detection: mark as seen now + active. first_seen_at keeps its
+        // table default (NOW()) on first insert and is left untouched on update
+        // because it's not part of this payload.
+        last_seen_at: seenAt,
+        is_active: true,
+        category_cluster: classifyCourse(c.title, c.category),
       }))
 
       const { error: upsertErr, data: upsertData } = await supabase
@@ -113,11 +154,33 @@ export async function ingestAllSFCourses(): Promise<SFIngestionSummary> {
     await delay(2000) // be polite between providers
   }
 
+  // Change detection: mark courses not seen in this run as inactive once
+  // they're stale (last_seen_at older than 3 days). When running for a
+  // single competitor, only that competitor's courses are affected.
+  let deactivated = 0
+  const staleCutoff = new Date(Date.now() - STALE_DAYS * 24 * 60 * 60 * 1000).toISOString()
+
+  let deactivateQuery = supabase
+    .from('sf_courses')
+    .update({ is_active: false })
+    .eq('is_active', true)
+    .lt('last_seen_at', staleCutoff)
+
+  if (competitorId) {
+    deactivateQuery = deactivateQuery.eq('competitor_id', competitorId)
+  }
+
+  const { data: deactivatedRows, error: deactivateErr } = await deactivateQuery.select('sf_ref_no')
+  if (!deactivateErr) {
+    deactivated = deactivatedRows?.length ?? 0
+  }
+
   return {
-    total_competitors: SF_PROVIDERS.length,
+    total_competitors: providers.length,
     total_found: totalFound,
     total_upserted: totalUpserted,
     results,
     started_at,
+    deactivated,
   }
 }

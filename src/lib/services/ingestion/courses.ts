@@ -21,24 +21,34 @@ function normalizeCourseTitle(title: string): string {
   return title.toLowerCase().replace(/\s+/g, ' ').trim()
 }
 
-export async function ingestAllCourses(): Promise<OverallCourseResult> {
+export async function ingestAllCourses(competitorId?: string): Promise<OverallCourseResult> {
   const supabase = await createServiceClient()
 
-  const { data: competitors, error } = await supabase
+  let query = supabase
     .from('competitors')
     .select('id, name, website')
     .eq('active', true)
+    .is('archived_at', null)
+    .eq('track_courses', true)
+
+  if (competitorId) query = query.eq('id', competitorId)
+
+  const { data: competitors, error } = await query
 
   if (error || !competitors) {
     throw new Error(`Failed to fetch competitors: ${error?.message}`)
   }
 
   // Mark stale courses as inactive
-  await supabase
+  let staleQuery = supabase
     .from('course_catalog')
     .update({ is_active: false })
     .eq('is_active', true)
     .lt('scraped_at', new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString())
+
+  if (competitorId) staleQuery = staleQuery.eq('competitor_id', competitorId)
+
+  await staleQuery
 
   const allResults: CourseIngestionResult[] = []
   let totalInserted = 0

@@ -38,14 +38,15 @@ function fmtTime(iso: string | null): string {
   }).format(new Date(iso)) + ' SGT'
 }
 
-/** Returns the ISO string for the NEXT 4:00 AM SGT after now. */
+/** Returns the ISO string for the NEXT 00:25 SGT (16:25 UTC) marketing-refresh run after now. */
 function nextRefreshISO(): string {
   const now = new Date()
   const todaySGT = new Intl.DateTimeFormat('en-CA', {
     timeZone: SGT, year: 'numeric', month: '2-digit', day: '2-digit',
   }).format(now)
   const [y, m, d] = todaySGT.split('-').map(Number)
-  const todayRefreshUTC = new Date(Date.UTC(y, m - 1, d, 20, 0, 0))
+  // marketing-refresh cron runs at 16:25 UTC = 00:25 SGT
+  const todayRefreshUTC = new Date(Date.UTC(y, m - 1, d, 16, 25, 0))
   const nextRefreshUTC  = now < todayRefreshUTC
     ? todayRefreshUTC
     : new Date(todayRefreshUTC.getTime() + 86_400_000)

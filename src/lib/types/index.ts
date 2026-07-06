@@ -1,4 +1,4 @@
-export type Platform = 'instagram' | 'facebook' | 'linkedin' | 'tiktok' | 'youtube' | 'threads'
+export type Platform = 'instagram' | 'facebook' | 'linkedin' | 'tiktok' | 'youtube'
 export type DataSource = 'scraped' | 'api' | 'verified' | 'unavailable'
 export type Tier = 'High' | 'Mid' | 'Low'
 export type AlertSeverity = 'low' | 'medium' | 'high' | 'critical'
@@ -24,6 +24,61 @@ export interface Competitor {
   active: boolean
   created_at: string
   updated_at: string
+  // Archive + module tracking toggles (migration 006).
+  // NOTE: kept optional (rather than required) so this additive change does
+  // not break existing object literals typed as Competitor elsewhere in the
+  // codebase (e.g. the fallback competitor builder in src/app/api/insights/route.ts)
+  // that predate these columns and are outside this task's allowed file list.
+  archived_at?: string | null
+  track_courses?: boolean
+  track_hiring?: boolean
+  track_marketing?: boolean
+  track_social?: boolean
+  track_seo?: boolean
+  include_in_opportunity_engine?: boolean
+}
+
+// ─── competitor_data_sources (migration 006) ──────────────────────────────────
+export type CompetitorDataSourceType =
+  | 'myskillsfuture'
+  | 'mycareersfuture'
+  | 'google_business'
+  | 'meta_ads'
+  | 'google_ads'
+  | 'jobstreet'
+  | 'indeed'
+  | 'careers_page'
+  | 'website'
+  | 'social'
+  | 'seo_domain'
+
+export interface CompetitorDataSource {
+  id: string
+  competitor_id: string
+  source_type: CompetitorDataSourceType
+  platform: string | null
+  identifier: string
+  url: string | null
+  is_primary: boolean
+  is_active: boolean
+  notes: string | null
+  last_verified_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+// ─── Refresh API contract (POST /api/refresh/competitor/[id]) ────────────────
+export type RefreshModuleStatus = 'success' | 'partial' | 'failed' | 'skipped'
+
+export interface RefreshModuleResult {
+  module: string
+  status: RefreshModuleStatus
+  message?: string
+}
+
+export interface CompetitorRefreshResponse {
+  competitor_id: string
+  results: RefreshModuleResult[]
 }
 
 export interface SocialProfile {

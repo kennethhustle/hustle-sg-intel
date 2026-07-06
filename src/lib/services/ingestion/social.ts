@@ -23,11 +23,12 @@ interface OverallResult {
   alerts_created: number
 }
 
-export async function ingestAllSocial(): Promise<OverallResult> {
+export async function ingestAllSocial(competitorId?: string): Promise<OverallResult> {
   const supabase = await createServiceClient()
 
-  // Fetch all active competitors with their social profiles
-  const { data: competitors, error: competitorsError } = await supabase
+  // Fetch all active, non-archived competitors (that opt into social tracking)
+  // with their social profiles
+  let query = supabase
     .from('competitors')
     .select(`
       id,
@@ -43,6 +44,12 @@ export async function ingestAllSocial(): Promise<OverallResult> {
       )
     `)
     .eq('active', true)
+    .is('archived_at', null)
+    .eq('track_social', true)
+
+  if (competitorId) query = query.eq('id', competitorId)
+
+  const { data: competitors, error: competitorsError } = await query
 
   if (competitorsError || !competitors) {
     throw new Error(`Failed to fetch competitors: ${competitorsError?.message}`)

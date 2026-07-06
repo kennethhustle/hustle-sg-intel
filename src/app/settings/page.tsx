@@ -8,10 +8,14 @@ import { ChangePasswordForm } from './change-password-form'
 export const revalidate = 60
 
 const CRON_SCHEDULE = [
-  { name: 'Social Refresh', path: '/api/cron/social-refresh', schedule: '0 23 * * *', time: '7:00am SGT', description: 'Scrapes social follower counts for all competitors' },
-  { name: 'Hiring Refresh', path: '/api/cron/hiring-refresh', schedule: '0 0 * * *', time: '8:00am SGT', description: 'Scrapes job postings from MCF, JobStreet, Indeed, career pages' },
-  { name: 'Courses Refresh', path: '/api/cron/courses-refresh', schedule: '0 1 * * *', time: '9:00am SGT', description: 'Scrapes SkillsFuture API and company course pages' },
-  { name: 'AI Insights', path: '/api/cron/ai-insights', schedule: '0 2 * * *', time: '10:00am SGT', description: 'Generates strategic insights using Claude AI' },
+  { name: 'SF Refresh', path: '/api/cron/sf-refresh', schedule: '0 16 * * *', time: '12:00am SGT', description: 'Refreshes MySkillsFuture course catalog data' },
+  { name: 'MySkillsFuture Refresh', path: '/api/cron/myskillsfuture-refresh', schedule: '5 16 * * *', time: '12:05am SGT', description: 'Refreshes MySkillsFuture provider and course metadata' },
+  { name: 'Run Count Refresh', path: '/api/cron/runcount-refresh', schedule: '10 16 * * *', time: '12:10am SGT', description: 'Refreshes upcoming course run counts from the MySF Solr API' },
+  { name: 'Marketing Refresh', path: '/api/cron/marketing-refresh', schedule: '25 16 * * *', time: '12:25am SGT', description: 'Refreshes Meta Ad Library counts and Google Places reviews/ratings' },
+  { name: 'Hiring Refresh', path: '/api/cron/hiring-refresh', schedule: '35 16 * * *', time: '12:35am SGT', description: 'Scrapes job postings from MCF, JobStreet, Indeed, career pages' },
+  { name: 'Social Refresh', path: '/api/cron/social-refresh', schedule: '45 16 * * *', time: '12:45am SGT', description: 'Scrapes social follower counts for all competitors' },
+  { name: 'Courses Refresh', path: '/api/cron/courses-refresh', schedule: '55 16 * * *', time: '12:55am SGT', description: 'Scrapes SkillsFuture API and company course pages' },
+  { name: 'AI Insights', path: '/api/cron/ai-insights', schedule: '15 17 * * *', time: '1:15am SGT', description: 'Generates strategic insights using Claude AI' },
 ]
 
 const PLATFORMS: Platform[] = ['instagram', 'facebook', 'linkedin', 'tiktok', 'youtube']
@@ -143,10 +147,13 @@ export default async function SettingsPage() {
 
         {/* Cron Schedule */}
         <section className="bg-slate-900/60 border border-slate-800 rounded-xl p-5">
-          <div className="flex items-center gap-2 mb-4">
+          <div className="flex items-center gap-2 mb-1">
             <Clock className="h-4 w-4 text-slate-400" />
             <h2 className="text-sm font-semibold text-white">Scraping Schedule</h2>
           </div>
+          <p className="text-xs text-slate-500 mb-4">
+            All data refreshes nightly, starting 12:00am SGT (16:00 UTC), running sequentially through 1:15am SGT.
+          </p>
           <div className="space-y-3">
             {CRON_SCHEDULE.map((cron) => (
               <div key={cron.path} className="flex items-start justify-between gap-4 p-3 bg-slate-800/50 rounded-lg border border-slate-700/50">

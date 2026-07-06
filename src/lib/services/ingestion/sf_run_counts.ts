@@ -14,7 +14,7 @@
  */
 
 import chromium from '@sparticuz/chromium'
-import puppeteer from 'puppeteer-core'
+import puppeteer, { type Browser, type HTTPRequest } from 'puppeteer-core'
 import { createServiceClient } from '@/lib/supabase/server'
 
 const COURSES_PER_PROVIDER = 5
@@ -52,7 +52,7 @@ function extractRunCount(text: string): number | null {
 
 /** Scrape a single batch of URLs in parallel using one browser instance */
 async function scrapeBatch(
-  browser: puppeteer.Browser,
+  browser: Browser,
   batch: Array<{ sf_ref_no: string; course_url: string }>
 ): Promise<RunCountResult[]> {
   // Open all pages in parallel
@@ -64,7 +64,7 @@ async function scrapeBatch(
       )
       // Block images/fonts to speed up loading
       await page.setRequestInterception(true)
-      page.on('request', (req) => {
+      page.on('request', (req: HTTPRequest) => {
         const type = req.resourceType()
         if (['image', 'font', 'stylesheet'].includes(type)) {
           req.abort()
@@ -113,9 +113,30 @@ async function scrapeBatch(
 }
 
 /** Main entry point: fetch courses from Supabase, scrape run counts, update DB */
-export async function scrapeAndUpdateRunCounts(): Promise<RunCountSummary> {
+export async function scrapeAndUpdateRunCounts(competitorId?: string): Promise<RunCountSummary> {
   const started_at = new Date().toISOString()
   const supabase = await createServiceClient()
+
+  // Only consider courses belonging to active, non-archived competitors that
+  // opt into course tracking (module toggle: track_courses).
+  let eligibleQuery = supabase
+    .from('competitors')
+    .select('id')
+    .eq('active', true)
+    .is('archived_at', null)
+    .eq('track_courses', true)
+
+  if (competitorId) eligibleQuery = eligibleQuery.eq('id', competitorId)
+
+  const { data: eligibleCompetitors, error: eligibleErr } = await eligibleQuery
+  if (eligibleErr) {
+    throw new Error(`Failed to fetch eligible competitors: ${eligibleErr.message}`)
+  }
+  const eligibleIds = (eligibleCompetitors ?? []).map((c) => c.id as string)
+
+  if (eligibleIds.length === 0) {
+    return { scraped: 0, updated: 0, errors: 0, results: [], started_at }
+  }
 
   // Fetch top N courses per provider that have a course URL
   // We use a subquery approach: get all courses ordered by provider + popularity,
@@ -123,6 +144,7 @@ export async function scrapeAndUpdateRunCounts(): Promise<RunCountSummary> {
   const { data: allCourses, error: fetchErr } = await supabase
     .from('sf_courses')
     .select('sf_ref_no, provider_name, popularity_score')
+    .in('competitor_id', eligibleIds)
     .order('provider_name', { ascending: true })
     .order('popularity_score', { ascending: false })
 

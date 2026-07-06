@@ -1,5 +1,7 @@
 import { createServiceClient } from '@/lib/supabase/server'
 import { AppLayout } from '@/components/layout/app-layout'
+import { DataSourceBadge } from '@/components/dashboard/data-source-badge'
+import { classifyCourse } from '@/lib/services/courses/categories'
 
 export const revalidate = 300
 
@@ -86,6 +88,11 @@ interface Course {
   respondent_count: number
   upcoming_run_count: number
   scraped_at: string
+  category_cluster: string | null
+  course_fee: number | null
+  first_seen_at: string | null
+  last_seen_at: string | null
+  is_active: boolean
 }
 
 interface ProviderRow {
@@ -94,11 +101,19 @@ interface ProviderRow {
   topCourse: Course
   top3: Course[]
   topRuns: number
+  fees: number[]
 }
 
 // ═══════════════════════════════════════════════════
 // DATA LAYER
 // ═══════════════════════════════════════════════════
+
+function median(values: number[]): number | null {
+  if (values.length === 0) return null
+  const sorted = [...values].sort((a, b) => a - b)
+  const mid = Math.floor(sorted.length / 2)
+  return sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
+}
 
 async function getData() {
   const supabase = await createServiceClient()
@@ -106,7 +121,7 @@ async function getData() {
   const { data, error } = await supabase
     .from('sf_courses')
     .select(
-      'sf_ref_no, title, provider_name, category_text, has_active_runs, respondent_count, upcoming_run_count, scraped_at',
+      'sf_ref_no, title, provider_name, category_text, has_active_runs, respondent_count, upcoming_run_count, scraped_at, category_cluster, course_fee, first_seen_at, last_seen_at, is_active',
     )
 
   if (error || !data || data.length === 0) return null
@@ -133,6 +148,7 @@ async function getData() {
       topCourse: sorted[0],
       top3: sorted.slice(0, 3),
       topRuns: sorted[0]?.upcoming_run_count ?? 0,
+      fees: pc.map(c => c.course_fee).filter((f): f is number => f != null),
     }
   })
 
@@ -153,6 +169,66 @@ async function getData() {
       return (b.upcoming_run_count ?? 0) - (a.upcoming_run_count ?? 0)
     })
 
+  // ── Category Clusters: aggregate by category_cluster (fallback to classifyCourse) ──
+  type ClusterAgg = {
+    cluster: string
+    totalRuns: number
+    providers: Set<string>
+    hustleRuns: number
+  }
+  const clusterMap = new Map<string, ClusterAgg>()
+  for (const c of courses) {
+    const cluster = c.category_cluster ?? classifyCourse(c.title, c.category_text)
+    const providerName = grp(c.provider_name)
+    const agg = clusterMap.get(cluster) ?? { cluster, totalRuns: 0, providers: new Set<string>(), hustleRuns: 0 }
+    const runs = c.upcoming_run_count ?? 0
+    agg.totalRuns += runs
+    agg.providers.add(providerName)
+    if (isHustle(c.provider_name)) agg.hustleRuns += runs
+    clusterMap.set(cluster, agg)
+  }
+  // Compute best-competitor total runs per cluster (sum across their courses, not just max single course)
+  const clusterCompetitorRuns = new Map<string, Map<string, number>>()
+  for (const c of courses) {
+    if (isHustle(c.provider_name)) continue
+    const cluster = c.category_cluster ?? classifyCourse(c.title, c.category_text)
+    const providerName = grp(c.provider_name)
+    const byProvider = clusterCompetitorRuns.get(cluster) ?? new Map<string, number>()
+    byProvider.set(providerName, (byProvider.get(providerName) ?? 0) + (c.upcoming_run_count ?? 0))
+    clusterCompetitorRuns.set(cluster, byProvider)
+  }
+  const categoryClusters = Array.from(clusterMap.values()).map(agg => {
+    const byProvider = clusterCompetitorRuns.get(agg.cluster)
+    let best: { name: string; runs: number } | null = null
+    if (byProvider) {
+      for (const [name, runs] of byProvider.entries()) {
+        if (!best || runs > best.runs) best = { name, runs }
+      }
+    }
+    const isGap = agg.hustleRuns === 0 || (best != null && agg.hustleRuns < best.runs * 0.5)
+    return {
+      cluster: agg.cluster,
+      totalRuns: agg.totalRuns,
+      providerCount: agg.providers.size,
+      hustleRuns: agg.hustleRuns,
+      bestCompetitor: best,
+      isGap,
+    }
+  }).sort((a, b) => b.totalRuns - a.totalRuns)
+
+  // ── New courses (last 7 days) ──
+  const now = Date.now()
+  const SEVEN_DAYS = 7 * 86_400_000
+  const FOURTEEN_DAYS = 14 * 86_400_000
+  const newCourses = courses
+    .filter(c => c.first_seen_at && now - new Date(c.first_seen_at).getTime() <= SEVEN_DAYS)
+    .sort((a, b) => (b.first_seen_at ?? '').localeCompare(a.first_seen_at ?? ''))
+
+  // ── Recently deactivated (is_active=false AND last_seen_at within last 14 days) ──
+  const recentlyDeactivated = courses
+    .filter(c => c.is_active === false && c.last_seen_at && now - new Date(c.last_seen_at).getTime() <= FOURTEEN_DAYS)
+    .sort((a, b) => (b.last_seen_at ?? '').localeCompare(a.last_seen_at ?? ''))
+
   return {
     rows: activeRows,
     maxRuns,
@@ -161,6 +237,9 @@ async function getData() {
     totalCourses: courses.length,
     totalEntities: activeRows.length,
     debugCourses,
+    categoryClusters,
+    newCourses,
+    recentlyDeactivated,
   }
 }
 
@@ -186,7 +265,7 @@ export default async function CourseIntelligencePage() {
     )
   }
 
-  const { rows, maxRuns, hasRunData, lastScraped, totalCourses, totalEntities, debugCourses } = d
+  const { rows, maxRuns, hasRunData, lastScraped, totalCourses, totalEntities, debugCourses, categoryClusters, newCourses, recentlyDeactivated } = d
   const { date, time } = fmtDT(lastScraped)
   const podium = rows.slice(0, 3)
 
@@ -195,7 +274,7 @@ export default async function CourseIntelligencePage() {
       <div className="space-y-6">
 
         {/* ══ STATUS ROW ══ */}
-        <div className="flex items-center gap-3 font-mono text-xs text-slate-500">
+        <div className="flex items-center gap-3 font-mono text-xs text-slate-500 flex-wrap">
           <span className="flex items-center gap-1.5">
             <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
             <span className="text-green-400">LIVE MONITORING</span>
@@ -204,6 +283,7 @@ export default async function CourseIntelligencePage() {
           <span>{totalEntities} providers tracked</span>
           <span className="text-slate-700">·</span>
           <span>DATA: {date} {time} SGT</span>
+          <DataSourceBadge kind="live" asOf={lastScraped} detail="MySkillsFuture API + nightly scrape" />
         </div>
 
         {/* ══ RUN DATA PENDING BANNER ══ */}
@@ -213,7 +293,7 @@ export default async function CourseIntelligencePage() {
             <div>
               <p className="text-amber-300 text-sm font-semibold">Course run data pending</p>
               <p className="text-amber-700 text-xs mt-0.5">
-                upcoming_run_count is 0 for all {totalCourses} courses. Populates after next scrape at 01:00 SGT.
+                upcoming_run_count is 0 for all {totalCourses} courses. Run counts refresh nightly at 00:10 SGT (runcount-refresh cron).
                 The Schedule tab on MySkillsFuture shows the count as &quot;Showing 1–X of <strong>N course runs</strong>&quot; —
                 our scraper reads this from doclist.numFound in the Solr API.
               </p>
@@ -226,7 +306,7 @@ export default async function CourseIntelligencePage() {
           <span className="text-amber-400 text-sm shrink-0 font-mono">⚠</span>
           <div className="text-xs text-amber-700 font-mono leading-relaxed">
             <span className="text-amber-500 font-semibold">DATA SOURCE:</span>{' '}
-            upcoming_run_count is sourced from the MySF API (scraped daily at 01:00 SGT). The API may include
+            upcoming_run_count is sourced from the MySF API (run counts refresh nightly at 00:10 SGT via runcount-refresh). The API may include
             provider-planned unpublished run slots that are not yet publicly visible on the MySF schedule page.
             Values shown are direct DB values — verify against the{' '}
             <span className="text-amber-500">↗ schedule links</span> below for confirmation.
@@ -300,6 +380,7 @@ export default async function CourseIntelligencePage() {
             const c = color(r.name)
             const barPct = maxRuns > 0 ? Math.max(1, Math.round((r.topRuns / maxRuns) * 100)) : 0
             const barColor = r.topRuns >= 20 ? '#ef4444' : r.topRuns >= 5 ? '#f59e0b' : '#475569'
+            const medianFee = median(r.fees)
 
             return (
               <details
@@ -318,6 +399,11 @@ export default async function CourseIntelligencePage() {
                       {r.isHustle && (
                         <span className="text-[9px] font-mono bg-violet-900/50 text-violet-400 border border-violet-800/60 px-1.5 py-px rounded">
                           YOU
+                        </span>
+                      )}
+                      {medianFee != null && (
+                        <span className="text-[10px] font-mono text-slate-500">
+                          median fee ${medianFee.toLocaleString(undefined, { maximumFractionDigits: 0 })}
                         </span>
                       )}
                       <span className="text-slate-700 text-[10px] font-mono ml-auto group-open:rotate-180 transition-transform">▾</span>
@@ -415,6 +501,105 @@ export default async function CourseIntelligencePage() {
               </details>
             )
           })}
+        </div>
+
+        {/* ══ CATEGORY CLUSTERS ══ */}
+        <div className="rounded-xl border border-slate-800/60 overflow-hidden">
+          <div className="px-5 py-3 bg-slate-900/60 border-b border-slate-800/60 flex items-center justify-between">
+            <span className="text-[10px] font-mono text-slate-400 tracking-widest uppercase">Category Clusters</span>
+            <span className="text-[10px] font-mono text-slate-600">Hustle&apos;s runs vs best competitor, per cluster</span>
+          </div>
+          {categoryClusters.length === 0 ? (
+            <p className="text-slate-600 text-xs font-mono px-5 py-4">No category cluster data available.</p>
+          ) : (
+            <div className="divide-y divide-slate-800/40">
+              {categoryClusters.map(cl => (
+                <div key={cl.cluster} className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-4 px-5 py-3">
+                  <div className="min-w-0">
+                    <span className="text-sm font-semibold text-slate-200">{cl.cluster}</span>
+                    <div className="text-[10px] text-slate-600 font-mono mt-0.5">{cl.providerCount} provider{cl.providerCount === 1 ? '' : 's'}</div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-[9px] text-slate-600 font-mono uppercase">Total Runs</div>
+                    <div className="text-sm font-mono font-bold text-slate-200">{cl.totalRuns}</div>
+                  </div>
+                  <div className="text-right">
+                    <div className="text-[9px] text-slate-600 font-mono uppercase">Hustle vs Best</div>
+                    <div className="text-sm font-mono">
+                      <span className="text-violet-300 font-bold">{cl.hustleRuns}</span>
+                      <span className="text-slate-600"> / </span>
+                      <span className="text-slate-300">{cl.bestCompetitor?.runs ?? 0}</span>
+                      {cl.bestCompetitor && <span className="text-slate-600 text-[10px]"> ({cl.bestCompetitor.name})</span>}
+                    </div>
+                  </div>
+                  <div className="text-right w-20">
+                    {cl.isGap ? (
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold border bg-red-950/60 text-red-400 border-red-800/50">
+                        GAP
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold border bg-emerald-950/60 text-emerald-400 border-emerald-800/50">
+                        LEADING
+                      </span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* ══ NEW COURSES / RECENTLY DEACTIVATED ══ */}
+        <div className="grid grid-cols-2 gap-4">
+          <div className="rounded-xl border border-slate-800/60 overflow-hidden">
+            <div className="px-5 py-3 bg-slate-900/60 border-b border-slate-800/60">
+              <span className="text-[10px] font-mono text-emerald-400 tracking-widest uppercase">New Courses (Last 7 Days)</span>
+            </div>
+            {newCourses.length === 0 ? (
+              <p className="text-slate-600 text-xs font-mono px-5 py-4">No new courses detected in the last 7 days.</p>
+            ) : (
+              <div className="divide-y divide-slate-800/40 max-h-72 overflow-y-auto">
+                {newCourses.map(c => (
+                  <div key={c.sf_ref_no} className="px-5 py-2.5 flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <a href={SF_URL(c.sf_ref_no)} target="_blank" rel="noopener noreferrer" className="text-xs text-slate-200 hover:text-emerald-400 transition-colors line-clamp-1">
+                        {c.title} ↗
+                      </a>
+                      <div className="text-[10px] text-slate-600 font-mono mt-0.5">{grp(c.provider_name)}</div>
+                    </div>
+                    <span className="text-[10px] text-slate-500 font-mono shrink-0">
+                      {c.first_seen_at ? new Date(c.first_seen_at).toLocaleDateString('en-SG', { day: '2-digit', month: 'short' }) : '—'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div className="rounded-xl border border-slate-800/60 overflow-hidden">
+            <div className="px-5 py-3 bg-slate-900/60 border-b border-slate-800/60">
+              <span className="text-[10px] font-mono text-red-400 tracking-widest uppercase">Recently Deactivated (Last 14 Days)</span>
+            </div>
+            {recentlyDeactivated.length === 0 ? (
+              <p className="text-slate-600 text-xs font-mono px-5 py-4">No courses deactivated in the last 14 days.</p>
+            ) : (
+              <div className="divide-y divide-slate-800/40 max-h-72 overflow-y-auto">
+                {recentlyDeactivated.map(c => (
+                  <div key={c.sf_ref_no} className="px-5 py-2.5 flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <a href={SF_URL(c.sf_ref_no)} target="_blank" rel="noopener noreferrer" className="text-xs text-slate-400 hover:text-red-400 transition-colors line-clamp-1">
+                        {c.title} ↗
+                      </a>
+                      <div className="text-[10px] text-slate-600 font-mono mt-0.5">{grp(c.provider_name)}</div>
+                    </div>
+                    <span className="text-[10px] text-slate-500 font-mono shrink-0">
+                      {c.last_seen_at ? new Date(c.last_seen_at).toLocaleDateString('en-SG', { day: '2-digit', month: 'short' }) : '—'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* ══ VALIDATION DEBUG TABLE ══ */}

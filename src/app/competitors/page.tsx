@@ -4,6 +4,7 @@ import { DataUnavailable } from '@/components/dashboard/data-unavailable'
 import { createClient } from '@/lib/supabase/server'
 import { formatNumber, formatRelativeTime } from '@/lib/utils'
 import { ExternalLink } from 'lucide-react'
+import Link from 'next/link'
 import type { Platform, Tier, DataSource } from '@/lib/types'
 
 export const revalidate = 300
@@ -123,12 +124,14 @@ export default async function CompetitorsPage() {
                   >
                     <td className="px-4 py-3.5 text-slate-500 text-xs">{idx + 1}</td>
                     <td className="px-4 py-3.5">
-                      <CompetitorBadge
-                        name={competitor.name}
-                        color={competitor.color}
-                        is_hustle={competitor.is_hustle}
-                        tier={competitor.tier as Tier}
-                      />
+                      <Link href={`/competitors/${competitor.slug}`} className="hover:opacity-80 transition-opacity">
+                        <CompetitorBadge
+                          name={competitor.name}
+                          color={competitor.color}
+                          is_hustle={competitor.is_hustle}
+                          tier={competitor.tier as Tier}
+                        />
+                      </Link>
                     </td>
                     <td className="px-4 py-3.5">
                       <span className={`text-xs px-2 py-0.5 rounded border font-medium ${
