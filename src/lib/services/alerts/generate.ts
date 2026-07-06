@@ -215,6 +215,220 @@ async function ruleRunCountSurge(supabase: SupabaseClient): Promise<NewAlert[]> 
   return alerts
 }
 
+// ─── Rule: course_fee_drop ──────────────────────────────────────────────────────
+// fee_change decrease >=15%, sourced from course_changes (written by
+// courses/intelligence.ts's detectCourseChanges). Dedup key includes the
+// sf_ref_no so multiple courses from the same competitor don't suppress
+// each other, matching the "avoid duplicate alerts for same event" ask.
+async function ruleCourseFeeDrop(supabase: SupabaseClient): Promise<NewAlert[]> {
+  const { data: rows, error } = await supabase
+    .from('course_changes')
+    .select('competitor_id, provider_name, course_title, sf_ref_no, old_value, new_value, change_percentage, detected_at')
+    .eq('change_type', 'fee_change')
+    .gte('detected_at', daysAgoIso(2))
+    .lte('change_percentage', -15)
+
+  if (error || !rows) return []
+
+  const alerts: NewAlert[] = []
+  for (const row of rows) {
+    const subKey = `fee_drop:${row.sf_ref_no}`
+    if (await alreadyAlerted(supabase, 'course_fee_drop', row.competitor_id as string | null, subKey)) continue
+
+    alerts.push({
+      competitor_id: (row.competitor_id as string) ?? null,
+      alert_type: 'course_fee_drop',
+      severity: 'medium',
+      title: `${row.provider_name ?? 'Competitor'} lowered course fee`,
+      description: `"${row.course_title}" fee dropped from $${row.old_value} to $${row.new_value} (${row.change_percentage}%).`,
+      recommended_action: 'Review Hustle SG pricing for the equivalent course category.',
+      data_source: 'myskillsfuture',
+      evidence: { sf_ref_no: row.sf_ref_no, old_value: row.old_value, new_value: row.new_value, change_percentage: row.change_percentage },
+      metadata: { dedup_sub_key: subKey },
+    })
+  }
+  return alerts
+}
+
+// ─── Rule: new_high_demand_course ───────────────────────────────────────────────
+// A new_course change whose course now has demand_score >= 75.
+async function ruleNewHighDemandCourse(supabase: SupabaseClient): Promise<NewAlert[]> {
+  const { data: changeRows, error } = await supabase
+    .from('course_changes')
+    .select('competitor_id, provider_name, course_title, category, sf_ref_no, detected_at')
+    .eq('change_type', 'new_course')
+    .gte('detected_at', daysAgoIso(2))
+
+  if (error || !changeRows || changeRows.length === 0) return []
+
+  const refNos = changeRows.map((r) => r.sf_ref_no as string).filter(Boolean)
+  if (refNos.length === 0) return []
+
+  const { data: courseRows, error: courseErr } = await supabase
+    .from('sf_courses')
+    .select('sf_ref_no, demand_score')
+    .in('sf_ref_no', refNos)
+    .gte('demand_score', 75)
+
+  if (courseErr || !courseRows || courseRows.length === 0) return []
+
+  const demandByRef = new Map(courseRows.map((r) => [r.sf_ref_no as string, r.demand_score as number]))
+
+  const alerts: NewAlert[] = []
+  for (const row of changeRows) {
+    const sfRefNo = row.sf_ref_no as string
+    const demandScore = demandByRef.get(sfRefNo)
+    if (demandScore === undefined) continue
+
+    const subKey = `new_high_demand:${sfRefNo}`
+    if (await alreadyAlerted(supabase, 'new_high_demand_course', row.competitor_id as string | null, subKey)) continue
+
+    alerts.push({
+      competitor_id: (row.competitor_id as string) ?? null,
+      alert_type: 'new_high_demand_course',
+      severity: 'high',
+      title: `New high-demand course: ${row.course_title}`,
+      description: `${row.provider_name ?? 'A competitor'} launched "${row.course_title}" (${row.category ?? 'uncategorized'}) with a demand score of ${demandScore}/100.`,
+      recommended_action: 'Assess whether Hustle SG should launch a competing offering in this category.',
+      data_source: 'myskillsfuture',
+      evidence: { sf_ref_no: sfRefNo, demand_score: demandScore, category: row.category },
+      metadata: { dedup_sub_key: subKey },
+    })
+  }
+  return alerts
+}
+
+// ─── Rule: hustle_overtaken ──────────────────────────────────────────────────────
+// For priority>=75 categories, a competitor's category runs newly exceed
+// Hustle's, comparing the latest two snapshot days.
+async function ruleHustleOvertaken(supabase: SupabaseClient): Promise<NewAlert[]> {
+  const { data: categoryRows, error: catErr } = await supabase
+    .from('course_categories')
+    .select('name, priority')
+    .gte('priority', 75)
+  if (catErr || !categoryRows || categoryRows.length === 0) return []
+  const highPriorityCategories = new Set(categoryRows.map((r) => r.name as string))
+
+  const { data: competitorsRaw, error: compErr } = await supabase
+    .from('competitors')
+    .select('id, name, is_hustle')
+    .eq('active', true)
+    .is('archived_at', null)
+  if (compErr || !competitorsRaw) return []
+  const hustle = competitorsRaw.find((c) => c.is_hustle as boolean) as { id: string; name: string } | undefined
+  if (!hustle) return []
+
+  const { data: snapshotRows, error: snapErr } = await supabase
+    .from('course_intelligence_snapshots')
+    .select('snapshot_date, provider_name, competitor_id, category_breakdown')
+    .order('snapshot_date', { ascending: false })
+    .limit(2000)
+  if (snapErr || !snapshotRows) return []
+
+  const dates = Array.from(new Set(snapshotRows.map((r) => r.snapshot_date as string))).sort().reverse()
+  if (dates.length < 2) return []
+  const [latestDate, priorDate] = dates
+
+  function runsFor(date: string, providerName: string, category: string): number {
+    const row = snapshotRows!.find((r) => r.snapshot_date === date && r.provider_name === providerName)
+    if (!row) return 0
+    const breakdown = (row.category_breakdown ?? {}) as Record<string, { runs: number }>
+    return breakdown[category]?.runs ?? 0
+  }
+
+  const alerts: NewAlert[] = []
+  const competitorNames = competitorsRaw.filter((c) => !(c.is_hustle as boolean)).map((c) => ({ id: c.id as string, name: c.name as string }))
+
+  for (const category of highPriorityCategories) {
+    const hustleLatest = runsFor(latestDate, hustle.name, category)
+    const hustlePrior = runsFor(priorDate, hustle.name, category)
+
+    for (const comp of competitorNames) {
+      const compLatest = runsFor(latestDate, comp.name, category)
+      const compPrior = runsFor(priorDate, comp.name, category)
+
+      const wasOvertaken = compPrior <= hustlePrior
+      const isOvertaken = compLatest > hustleLatest
+      if (!(wasOvertaken && isOvertaken && compLatest > 0)) continue
+
+      const subKey = `overtaken:${comp.id}:${category}`
+      if (await alreadyAlerted(supabase, 'hustle_overtaken', comp.id, subKey)) continue
+
+      alerts.push({
+        competitor_id: comp.id,
+        alert_type: 'hustle_overtaken',
+        severity: 'high',
+        title: `Provider overtook Hustle in key category`,
+        description: `${comp.name} now runs ${compLatest} upcoming ${category} sessions vs Hustle's ${hustleLatest} (was ${compPrior} vs ${hustlePrior} on ${priorDate}).`,
+        recommended_action: `Review Hustle's ${category} scheduling and marketing — this is a strategic priority category.`,
+        data_source: 'myskillsfuture',
+        evidence: { category, competitor_runs: compLatest, hustle_runs: hustleLatest, prior_competitor_runs: compPrior, prior_hustle_runs: hustlePrior },
+        metadata: { dedup_sub_key: subKey },
+      })
+    }
+  }
+  return alerts
+}
+
+// ─── Rule: category_crowding ─────────────────────────────────────────────────────
+// A category reaches >=4 providers with runs growth >=30% (latest two snapshot days).
+async function ruleCategoryCrowding(supabase: SupabaseClient): Promise<NewAlert[]> {
+  const { data: snapshotRows, error } = await supabase
+    .from('course_intelligence_snapshots')
+    .select('snapshot_date, provider_name, category_breakdown')
+    .order('snapshot_date', { ascending: false })
+    .limit(2000)
+  if (error || !snapshotRows) return []
+
+  const dates = Array.from(new Set(snapshotRows.map((r) => r.snapshot_date as string))).sort().reverse()
+  if (dates.length < 2) return []
+  const [latestDate, priorDate] = dates
+
+  const latestByCategory = new Map<string, { providers: Set<string>; runs: number }>()
+  const priorRunsByCategory = new Map<string, number>()
+
+  for (const row of snapshotRows) {
+    const breakdown = (row.category_breakdown ?? {}) as Record<string, { runs: number; courses: number }>
+    const date = row.snapshot_date as string
+    const provider = row.provider_name as string
+    for (const [category, v] of Object.entries(breakdown)) {
+      if (date === latestDate) {
+        const entry = latestByCategory.get(category) ?? { providers: new Set<string>(), runs: 0 }
+        if ((v.runs ?? 0) > 0) entry.providers.add(provider)
+        entry.runs += v.runs ?? 0
+        latestByCategory.set(category, entry)
+      } else if (date === priorDate) {
+        priorRunsByCategory.set(category, (priorRunsByCategory.get(category) ?? 0) + (v.runs ?? 0))
+      }
+    }
+  }
+
+  const alerts: NewAlert[] = []
+  for (const [category, latest] of latestByCategory) {
+    if (latest.providers.size < 4) continue
+    const priorRuns = priorRunsByCategory.get(category) ?? 0
+    if (priorRuns <= 0) continue
+    const pct = ((latest.runs - priorRuns) / priorRuns) * 100
+    if (pct < 30) continue
+
+    const subKey = `crowding:${category}`
+    if (await alreadyAlerted(supabase, 'category_crowding', null, subKey)) continue
+
+    alerts.push({
+      competitor_id: null,
+      alert_type: 'category_crowding',
+      severity: 'low',
+      title: 'Category becoming crowded',
+      description: `${category} now has ${latest.providers.size} active providers with upcoming runs growing ${pct.toFixed(0)}% (${priorRuns} to ${latest.runs}) since ${priorDate}.`,
+      recommended_action: 'Monitor differentiation and pricing pressure in this category.',
+      data_source: 'myskillsfuture',
+      evidence: { category, providers_count: latest.providers.size, prior_runs: priorRuns, current_runs: latest.runs, growth_pct: Math.round(pct) },
+      metadata: { dedup_sub_key: subKey },
+    })
+  }
+  return alerts
+}
+
 // ─── Rule: meta_ads_change + review_growth (share the same snapshot query) ─────
 async function ruleMarketingSnapshotChanges(supabase: SupabaseClient): Promise<NewAlert[]> {
   const { data: rows, error } = await supabase
@@ -442,6 +656,10 @@ export async function generateDataAlerts(): Promise<GenerateAlertsResult> {
     ruleNewCompetitorCourse(supabase),
     ruleCourseRemoved(supabase),
     ruleRunCountSurge(supabase),
+    ruleCourseFeeDrop(supabase),
+    ruleNewHighDemandCourse(supabase),
+    ruleHustleOvertaken(supabase),
+    ruleCategoryCrowding(supabase),
     ruleMarketingSnapshotChanges(supabase),
     ruleHiringSpike(supabase),
     ruleDataQuality(supabase),

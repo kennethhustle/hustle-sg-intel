@@ -12,6 +12,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { startRefreshLog, type RefreshStatus, type TriggerType } from '@/lib/services/refresh-log'
 import { ingestAllSFCourses } from '@/lib/services/ingestion/sf_courses'
 import { scrapeAndUpdateRunCounts } from '@/lib/services/ingestion/sf_run_counts'
+import { runCourseIntelligencePipeline } from '@/lib/services/courses/intelligence'
 import { runMarketingRefresh } from '@/lib/services/marketing/refresh'
 import { ingestAllJobs } from '@/lib/services/ingestion/jobs'
 import { ingestAllSocial } from '@/lib/services/ingestion/social'
@@ -213,7 +214,20 @@ async function runRunCounts(triggeredBy: TriggerType): Promise<ModuleRunResult> 
       : null
     const status: RefreshStatus = hasErrors ? 'partial' : 'success'
     const counts: ModuleRunCounts = { fetched: result.scraped, updated: result.updated, failed: result.errors }
-    await log.finalize(status, counts, errorMessage)
+
+    // Post-refresh computation: demand scores, change detection, snapshots,
+    // threat scores, opportunity scores. Non-fatal — logged in metadata only,
+    // never downgrades the runcounts module's own status.
+    let pipelineResult: { changes: number; snapshots: number; threats: number } | null = null
+    let pipelineError: string | null = null
+    try {
+      pipelineResult = await runCourseIntelligencePipeline()
+    } catch (pipelineErr) {
+      pipelineError = pipelineErr instanceof Error ? pipelineErr.message : String(pipelineErr)
+      console.error('runRunCounts: course intelligence pipeline failed:', pipelineError)
+    }
+
+    await log.finalize(status, counts, errorMessage, { intelligence_pipeline: pipelineResult, intelligence_pipeline_error: pipelineError })
     return buildResult(descriptor.key, status, started_at, counts, errorMessage)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)

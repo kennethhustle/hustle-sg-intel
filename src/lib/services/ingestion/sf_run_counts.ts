@@ -144,7 +144,7 @@ export async function scrapeAndUpdateRunCounts(competitorId?: string): Promise<R
   // then deduplicate to top N per provider in JS (Supabase doesn't support DISTINCT ON easily)
   const { data: allCourses, error: fetchErr } = await supabase
     .from('sf_courses')
-    .select('sf_ref_no, provider_name, popularity_score')
+    .select('sf_ref_no, provider_name, popularity_score, upcoming_run_count')
     .in('competitor_id', eligibleIds)
     .order('provider_name', { ascending: true })
     .order('popularity_score', { ascending: false })
@@ -153,9 +153,10 @@ export async function scrapeAndUpdateRunCounts(competitorId?: string): Promise<R
     throw new Error(`Failed to fetch courses: ${fetchErr?.message}`)
   }
 
-  // Pick top N per provider
+  // Pick top N per provider. Carry the pre-scrape upcoming_run_count through
+  // so the update below can set prev_run_count = the value before this run.
   const providerCounts = new Map<string, number>()
-  const selectedCourses: Array<{ sf_ref_no: string; course_url: string }> = []
+  const selectedCourses: Array<{ sf_ref_no: string; course_url: string; prior_run_count: number | null }> = []
 
   for (const course of allCourses) {
     const provider = course.provider_name
@@ -165,6 +166,7 @@ export async function scrapeAndUpdateRunCounts(competitorId?: string): Promise<R
       selectedCourses.push({
         sf_ref_no: course.sf_ref_no,
         course_url: buildCourseUrl(course.sf_ref_no),
+        prior_run_count: course.upcoming_run_count as number | null,
       })
     }
   }
@@ -205,14 +207,19 @@ export async function scrapeAndUpdateRunCounts(competitorId?: string): Promise<R
     await browser.close().catch(() => {})
   }
 
-  // Update sf_courses.upcoming_run_count for successful scrapes
+  // Update sf_courses.upcoming_run_count for successful scrapes, carrying the
+  // pre-scrape count forward into prev_run_count for change detection.
   let updated = 0
   const successful = allResults.filter((r) => r.error === null)
+  const priorRunCountByRef = new Map(selectedCourses.map((c) => [c.sf_ref_no, c.prior_run_count]))
 
   for (const result of successful) {
     const { error: updateErr } = await supabase
       .from('sf_courses')
-      .update({ upcoming_run_count: result.upcoming_run_count })
+      .update({
+        upcoming_run_count: result.upcoming_run_count,
+        prev_run_count: priorRunCountByRef.get(result.sf_ref_no) ?? null,
+      })
       .eq('sf_ref_no', result.sf_ref_no)
 
     if (!updateErr) {

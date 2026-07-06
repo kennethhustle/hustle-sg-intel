@@ -85,6 +85,29 @@ export async function ingestAllSFCourses(competitorId?: string): Promise<SFInges
   let totalFound = 0, totalUpserted = 0
   const seenAt = new Date().toISOString()
 
+  // Preload existing values for every course we might touch, keyed by
+  // sf_ref_no, so the upsert can carry prev_fee/prev_rating/prev_respondent_count
+  // forward for change detection (see courses/intelligence.ts).
+  const existingByRef = new Map<
+    string,
+    { upcoming_run_count: number | null; course_fee: number | null; quality_rating: number | null; respondent_count: number | null }
+  >()
+  {
+    const { data: existingRows, error: existingErr } = await supabase
+      .from('sf_courses')
+      .select('sf_ref_no, upcoming_run_count, course_fee, quality_rating, respondent_count')
+    if (!existingErr && existingRows) {
+      for (const row of existingRows) {
+        existingByRef.set(row.sf_ref_no as string, {
+          upcoming_run_count: row.upcoming_run_count as number | null,
+          course_fee: row.course_fee as number | null,
+          quality_rating: row.quality_rating as number | null,
+          respondent_count: row.respondent_count as number | null,
+        })
+      }
+    }
+  }
+
   for (const provider of providers) {
     const scraped_at = new Date().toISOString()
     let courses: SFCourse[] = []
@@ -101,31 +124,39 @@ export async function ingestAllSFCourses(competitorId?: string): Promise<SFInges
     }
 
     if (courses.length > 0) {
-      const rows = courses.map((c: SFCourse) => ({
-        competitor_id: provider.competitorId,
-        sf_ref_no: c.sfRefNo,
-        title: c.title,
-        provider_name: c.providerName,
-        category_text: c.category,
-        course_fee: c.totalCost,
-        popularity_score: c.popularityScore,
-        respondent_count: c.respondents,
-        quality_rating: c.rating,
-        has_active_runs: c.hasActiveRuns,
-        course_mode: c.modeOfTraining,
-        // NOTE: upcoming_run_count is intentionally excluded from this upsert.
-        // The Solr API does not expose run counts (doclist.numFound is absent).
-        // Run counts are scraped separately via browser navigation (authenticated
-        // MySkillsFuture session required) and must never be overwritten here.
-        source_api_url: sourceUrl,
-        scraped_at,
-        // Change detection: mark as seen now + active. first_seen_at keeps its
-        // table default (NOW()) on first insert and is left untouched on update
-        // because it's not part of this payload.
-        last_seen_at: seenAt,
-        is_active: true,
-        category_cluster: classifyCourse(c.title, c.category),
-      }))
+      const rows = courses.map((c: SFCourse) => {
+        const existing = existingByRef.get(c.sfRefNo)
+        return {
+          competitor_id: provider.competitorId,
+          sf_ref_no: c.sfRefNo,
+          title: c.title,
+          provider_name: c.providerName,
+          category_text: c.category,
+          course_fee: c.totalCost,
+          popularity_score: c.popularityScore,
+          respondent_count: c.respondents,
+          quality_rating: c.rating,
+          has_active_runs: c.hasActiveRuns,
+          course_mode: c.modeOfTraining,
+          // NOTE: upcoming_run_count is intentionally excluded from this upsert.
+          // The Solr API does not expose run counts (doclist.numFound is absent).
+          // Run counts are scraped separately via browser navigation (authenticated
+          // MySkillsFuture session required) and must never be overwritten here.
+          source_api_url: sourceUrl,
+          scraped_at,
+          // Change detection: mark as seen now + active. first_seen_at keeps its
+          // table default (NOW()) on first insert and is left untouched on update
+          // because it's not part of this payload.
+          last_seen_at: seenAt,
+          is_active: true,
+          category_cluster: classifyCourse(c.title, c.category),
+          // Preserve the OLD values (pre-upsert) so intelligence.ts can diff
+          // fee/rating/respondent changes on the next pipeline run.
+          prev_fee: existing?.course_fee ?? null,
+          prev_rating: existing?.quality_rating ?? null,
+          prev_respondent_count: existing?.respondent_count ?? null,
+        }
+      })
 
       const { error: upsertErr, data: upsertData } = await supabase
         .from('sf_courses')

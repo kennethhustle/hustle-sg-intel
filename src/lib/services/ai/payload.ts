@@ -8,6 +8,7 @@
 import { createServiceClient } from '@/lib/supabase/server'
 import { CATEGORY_CLUSTERS, classifyCourse, type CategoryCluster } from '@/lib/services/courses/categories'
 import { getSourceStatuses } from '@/lib/services/data-sources'
+import { getCategoryIntelligence } from '@/lib/services/courses/intelligence'
 
 type SupabaseClient = Awaited<ReturnType<typeof createServiceClient>>
 
@@ -134,6 +135,30 @@ export interface ExcludedDataEntry {
   last_success_at: string | null
 }
 
+export interface CourseChangeSummaryEntry {
+  change_type: string
+  provider_name: string | null
+  course_title: string | null
+  category: string | null
+  change_amount: number | null
+  change_percentage: number | null
+  detected_at: string
+}
+
+export interface ProviderThreatSummaryEntry {
+  name: string
+  score: number
+  label: string
+}
+
+export interface CategoryIntelSummaryEntry {
+  category: string
+  runs: number
+  providersCount: number
+  hustleSharePct: number
+  opportunityScore: number | null
+}
+
 export interface IntelligencePayload {
   competitorOverview: CompetitorOverview[]
   courseIntel: CourseIntelEntry[]
@@ -149,6 +174,9 @@ export interface IntelligencePayload {
   recentInsightTitles: string[]
   sourceStatus: SourceStatusEntry[]
   excludedData: ExcludedDataEntry[]
+  topCourseChanges: CourseChangeSummaryEntry[]
+  providerThreatScores: ProviderThreatSummaryEntry[]
+  categoryIntelSummary: CategoryIntelSummaryEntry[]
 }
 
 const TOP_N_COURSES = 5
@@ -270,6 +298,9 @@ export async function buildIntelligencePayload(supabase: SupabaseClient): Promis
       recentInsightTitles: [],
       sourceStatus,
       excludedData,
+      topCourseChanges: [],
+      providerThreatScores: [],
+      categoryIntelSummary: [],
     }
   }
 
@@ -632,6 +663,62 @@ export async function buildIntelligencePayload(supabase: SupabaseClient): Promis
   // ---------- Data source status awareness ----------
   const { sourceStatus, excludedData } = await buildSourceAwareness()
 
+  // ---------- Course market intelligence (additive, migration 011) ----------
+  const TOP_N_COURSE_CHANGES = 15
+
+  const { data: courseChangesRaw } = await supabase
+    .from('course_changes')
+    .select('change_type, provider_name, course_title, category, change_amount, change_percentage, detected_at')
+    .gte('detected_at', sevenDaysAgo)
+    .order('detected_at', { ascending: false })
+    .limit(TOP_N_COURSE_CHANGES)
+
+  const topCourseChanges: CourseChangeSummaryEntry[] = ((courseChangesRaw ?? []) as Array<{
+    change_type: string
+    provider_name: string | null
+    course_title: string | null
+    category: string | null
+    change_amount: number | null
+    change_percentage: number | null
+    detected_at: string
+  }>).map((r) => ({
+    change_type: r.change_type,
+    provider_name: r.provider_name,
+    course_title: r.course_title,
+    category: r.category,
+    change_amount: r.change_amount,
+    change_percentage: r.change_percentage,
+    detected_at: r.detected_at,
+  }))
+
+  const { data: threatRaw } = await supabase
+    .from('provider_threat_scores')
+    .select('provider_name, total_score, threat_label')
+    .eq('is_current', true)
+    .order('total_score', { ascending: false })
+
+  const providerThreatScores: ProviderThreatSummaryEntry[] = ((threatRaw ?? []) as Array<{
+    provider_name: string
+    total_score: number
+    threat_label: string
+  }>).map((r) => ({ name: r.provider_name, score: r.total_score, label: r.threat_label }))
+
+  let categoryIntelSummary: CategoryIntelSummaryEntry[] = []
+  try {
+    const categoryIntel = await getCategoryIntelligence()
+    categoryIntelSummary = categoryIntel
+      .filter((c) => c.category !== 'Other')
+      .map((c) => ({
+        category: c.category,
+        runs: c.runs,
+        providersCount: c.providersCount,
+        hustleSharePct: c.hustle.sharePct,
+        opportunityScore: c.opportunity?.score ?? null,
+      }))
+  } catch (err) {
+    console.error('buildIntelligencePayload: getCategoryIntelligence failed:', err)
+  }
+
   return {
     competitorOverview,
     courseIntel,
@@ -644,6 +731,9 @@ export async function buildIntelligencePayload(supabase: SupabaseClient): Promis
     recentInsightTitles,
     sourceStatus,
     excludedData,
+    topCourseChanges,
+    providerThreatScores,
+    categoryIntelSummary,
   }
 }
 
