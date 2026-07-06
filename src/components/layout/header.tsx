@@ -3,17 +3,19 @@
 import { useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { useRouter } from 'next/navigation'
-import { RefreshCw, LogOut, User, ChevronDown } from 'lucide-react'
-import { formatRelativeTime } from '@/lib/utils'
+import { LogOut, User, ChevronDown } from 'lucide-react'
+import { LastUpdated } from './last-updated'
+import { LiveDataIndicator } from './live-data-indicator'
 
 interface HeaderProps {
   title?: string
+  /** @deprecated superseded by <LastUpdated /> which reads /api/refresh/status directly */
   lastUpdated?: string | null
   userEmail?: string | null
   userInitial?: string | null
 }
 
-export function Header({ title = 'Intel', lastUpdated, userEmail, userInitial }: HeaderProps) {
+export function Header({ title = 'Intel', userEmail, userInitial }: HeaderProps) {
   const [dropdownOpen, setDropdownOpen] = useState(false)
   const router = useRouter()
   const supabase = createClient()
@@ -24,20 +26,18 @@ export function Header({ title = 'Intel', lastUpdated, userEmail, userInitial }:
   }
 
   return (
-    <header className="h-14 border-b border-slate-800 flex items-center justify-between px-6 pl-14 md:pl-6 bg-[#09090f]/90 backdrop-blur sticky top-0 z-30">
+    <header className="h-14 shrink-0 border-b border-slate-800 flex items-center justify-between px-6 pl-14 md:pl-6 bg-[#09090f]/90 backdrop-blur sticky top-0 z-30">
       {/* Left: Page title */}
-      <div className="flex items-center gap-3">
-        <h1 className="text-base font-semibold text-white">{title}</h1>
-        {lastUpdated && (
-          <span className="hidden sm:flex items-center gap-1.5 text-xs text-slate-500">
-            <RefreshCw className="h-3 w-3" />
-            Updated {formatRelativeTime(lastUpdated)}
-          </span>
-        )}
+      <div className="flex items-center gap-3 min-w-0">
+        <h1 className="text-base font-semibold text-white truncate">{title}</h1>
       </div>
 
-      {/* Right: User menu */}
-      <div className="relative">
+      {/* Right: freshness + user menu */}
+      <div className="flex items-center gap-1.5 shrink-0">
+        <LastUpdated />
+        <LiveDataIndicator variant="compact" />
+
+        <div className="relative">
         <button
           onClick={() => setDropdownOpen((prev) => !prev)}
           className="flex items-center gap-2.5 px-3 py-1.5 rounded-lg hover:bg-slate-800 transition-colors"
@@ -76,6 +76,7 @@ export function Header({ title = 'Intel', lastUpdated, userEmail, userInitial }:
             </div>
           </>
         )}
+        </div>
       </div>
     </header>
   )

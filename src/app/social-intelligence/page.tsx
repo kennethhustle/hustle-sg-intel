@@ -14,6 +14,7 @@ import type { ReactNode } from 'react'
 import { createClient } from '@/lib/supabase/server'
 import { AppLayout } from '@/components/layout/app-layout'
 import { DataSourceBadge } from '@/components/dashboard/data-source-badge'
+import { ModuleStatus } from '@/components/dashboard/module-status'
 
 export const revalidate = 300
 
@@ -344,6 +345,8 @@ export default async function SocialIntelligencePage() {
   return (
     <AppLayout title="Social Intelligence" lastUpdated={sgDate}>
       <div className="space-y-8 max-w-full">
+
+        <ModuleStatus module="social" sourceLabel="YouTube API + manual entries (cached)" />
 
         {/* ─── SECTION 1: MARKET THREAT RADAR ─────────────────────────────── */}
         <section>

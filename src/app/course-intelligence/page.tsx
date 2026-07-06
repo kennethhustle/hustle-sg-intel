@@ -1,6 +1,7 @@
 import { createServiceClient } from '@/lib/supabase/server'
 import { AppLayout } from '@/components/layout/app-layout'
 import { DataSourceBadge } from '@/components/dashboard/data-source-badge'
+import { ModuleStatus } from '@/components/dashboard/module-status'
 import { classifyCourse } from '@/lib/services/courses/categories'
 
 export const revalidate = 300
@@ -272,6 +273,8 @@ export default async function CourseIntelligencePage() {
   return (
     <AppLayout title="MySkillsFuture Intelligence" lastUpdated={lastScraped}>
       <div className="space-y-6">
+
+        <ModuleStatus module="sf_courses" sourceLabel="MySkillsFuture cached data" />
 
         {/* ══ STATUS ROW ══ */}
         <div className="flex items-center gap-3 font-mono text-xs text-slate-500 flex-wrap">

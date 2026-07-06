@@ -2,8 +2,10 @@ import { AppLayout } from '@/components/layout/app-layout'
 import { createClient } from '@/lib/supabase/server'
 import { formatRelativeTime, getPlatformLabel, cn } from '@/lib/utils'
 import { Clock, Database, Globe, User, Shield, Users, ArrowRight } from 'lucide-react'
-import type { Platform } from '@/lib/types'
+import type { Platform, UserRole } from '@/lib/types'
 import { ChangePasswordForm } from './change-password-form'
+import { DataRefreshPanel } from './data-refresh-panel'
+import { RefreshLogsPanel } from './refresh-logs-panel'
 
 export const revalidate = 60
 
@@ -85,10 +87,17 @@ async function getSettingsData() {
 
 export default async function SettingsPage() {
   const { user, userData, competitors, profileMap, lastRun } = await getSettingsData()
+  const role: UserRole = (userData?.role as UserRole) ?? 'viewer'
 
   return (
     <AppLayout title="Settings">
       <div className="space-y-6 max-w-5xl">
+        {/* Manual Intelligence Refresh */}
+        <DataRefreshPanel role={role} />
+
+        {/* Data Refresh Logs */}
+        <RefreshLogsPanel />
+
         {/* User Profile */}
         <section className="bg-slate-900/60 border border-slate-800 rounded-xl p-5">
           <div className="flex items-center gap-2 mb-4">

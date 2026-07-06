@@ -1,6 +1,7 @@
 import { AppLayout } from '@/components/layout/app-layout'
 import { CompetitorBadge } from '@/components/dashboard/competitor-badge'
 import { DataUnavailable } from '@/components/dashboard/data-unavailable'
+import { ModuleStatus } from '@/components/dashboard/module-status'
 import { createClient } from '@/lib/supabase/server'
 import { formatDate, formatRelativeTime, formatCurrency } from '@/lib/utils'
 import { ExternalLink, Briefcase } from 'lucide-react'
@@ -61,6 +62,8 @@ export default async function HiringIntelligencePage() {
 
   return (
     <AppLayout title="Hiring Intelligence" lastUpdated={lastUpdated}>
+      <ModuleStatus module="hiring" sourceLabel="MyCareersFuture API + job boards (cached)" />
+
       {/* Summary Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
         <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-4">
