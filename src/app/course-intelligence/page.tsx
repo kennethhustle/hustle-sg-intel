@@ -210,8 +210,30 @@ export default async function CourseIntelligencePage() {
                 tooltip="Category with the largest absolute increase in total runs since the prior snapshot."
                 accent="indigo"
               />
-              <MetricCard title="Hustle Rank (Runs)" value={rankLabel(snapshot.hustleRankByRuns, snapshot.totalProviders)} tooltip="Hustle's rank among all tracked providers by total upcoming run count." accent="amber" />
-              <MetricCard title="Hustle Rank (Courses)" value={rankLabel(snapshot.hustleRankByCourses, snapshot.totalProviders)} tooltip="Hustle's rank among all tracked providers by number of active courses." accent="amber" />
+              <MetricCard
+                title="Hustle Rank (Runs)"
+                value={
+                  snapshot.hustleRanks.length === 0
+                    ? '—'
+                    : snapshot.hustleRanks
+                        .map((r) => `${r.name}: ${r.rankByRuns == null ? 'no courses yet' : rankLabel(r.rankByRuns, snapshot.totalProviders)}`)
+                        .join(' · ')
+                }
+                tooltip="Each Hustle provider entity's rank among all tracked providers by total upcoming run count."
+                accent="amber"
+              />
+              <MetricCard
+                title="Hustle Rank (Courses)"
+                value={
+                  snapshot.hustleRanks.length === 0
+                    ? '—'
+                    : snapshot.hustleRanks
+                        .map((r) => `${r.name}: ${r.rankByCourses == null ? 'no courses yet' : rankLabel(r.rankByCourses, snapshot.totalProviders)}`)
+                        .join(' · ')
+                }
+                tooltip="Each Hustle provider entity's rank among all tracked providers by number of active courses."
+                accent="amber"
+              />
             </div>
           )}
         </section>
@@ -243,18 +265,55 @@ export default async function CourseIntelligencePage() {
             </div>
           ) : (
             <div className="space-y-4">
-              {/* Hustle stat cards */}
+              {/* Hustle stat cards (combined) */}
               <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-                <MetricCard title="Hustle Runs" value={gapAnalysis.hustle.totalRuns.toLocaleString()} tooltip="Hustle's total upcoming run count across all active courses." accent="indigo" />
-                <MetricCard title="Hustle Courses" value={gapAnalysis.hustle.activeCourses.toLocaleString()} tooltip="Hustle's total active course count." accent="indigo" />
-                <MetricCard title="Market Share" value={`${gapAnalysis.hustle.marketSharePct.toFixed(1)}%`} tooltip="Hustle's share of total market runs across all tracked providers." accent="indigo" />
-                <MetricCard title="Hustle Rank" value={gapAnalysis.hustle.rank != null ? `#${gapAnalysis.hustle.rank}` : '—'} tooltip="Hustle's rank among all tracked providers by total runs." accent="amber" />
+                <MetricCard title="Hustle Runs (Combined)" value={gapAnalysis.hustle.totalRuns.toLocaleString()} tooltip="Combined upcoming run count across both Hustle provider entities (Hustle Academy + Hustle Institute)." accent="indigo" />
+                <MetricCard title="Hustle Courses (Combined)" value={gapAnalysis.hustle.activeCourses.toLocaleString()} tooltip="Combined active course count across both Hustle provider entities." accent="indigo" />
+                <MetricCard title="Market Share (Combined)" value={`${gapAnalysis.hustle.marketSharePct.toFixed(1)}%`} tooltip="Combined share of total market runs across both Hustle provider entities." accent="indigo" />
+                <MetricCard title="Hustle Rank (Combined)" value={gapAnalysis.hustle.rank != null ? `#${gapAnalysis.hustle.rank}` : '—'} tooltip="Rank the COMBINED Hustle runs would hold among tracked providers." accent="amber" />
                 <MetricCard
                   title="Hustle Top Course"
                   value={gapAnalysis.hustle.topCourse ? `${gapAnalysis.hustle.topCourse.title} (${gapAnalysis.hustle.topCourse.runs})` : '—'}
-                  tooltip="Hustle's highest-run course."
+                  tooltip="Highest-run course across either Hustle provider entity."
                 />
               </div>
+
+              {/* Per-entity stat rows */}
+              <div className="rounded-xl border border-slate-800/60 overflow-hidden">
+                <div className="px-4 py-2 bg-slate-900/60 border-b border-slate-800/60">
+                  <span className="text-[10px] font-mono text-indigo-400 tracking-widest uppercase">Hustle Provider Entities</span>
+                </div>
+                {gapAnalysis.entities.length === 0 ? (
+                  <p className="text-xs text-slate-600 px-4 py-3">No Hustle courses cached yet.</p>
+                ) : (
+                  <div className="divide-y divide-slate-800/40">
+                    {gapAnalysis.entities.map((e) => (
+                      <div key={e.name} className="px-4 py-3 grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs">
+                        <span className="font-medium text-slate-200">{e.name}</span>
+                        <span className="text-slate-400">
+                          <span className="font-mono text-slate-200">{e.totalRuns}</span> runs
+                        </span>
+                        <span className="text-slate-400">
+                          <span className="font-mono text-slate-200">{e.activeCourses}</span> courses
+                        </span>
+                        <span className="text-slate-400 line-clamp-1">
+                          {e.topCourse ? `${e.topCourse.title} (${e.topCourse.runs})` : 'No courses yet'}
+                        </span>
+                        <span className="text-amber-400 font-mono">
+                          {e.rankByRuns != null ? `#${e.rankByRuns}` : 'no courses yet'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Combined Hustle summary */}
+              <p className="text-xs text-slate-400">
+                Combined, both Hustle entities represent <span className="font-mono text-indigo-300">{gapAnalysis.hustle.marketSharePct.toFixed(1)}%</span> of tracked
+                course runs ({gapAnalysis.hustle.totalRuns.toLocaleString()} runs across {gapAnalysis.hustle.activeCourses.toLocaleString()} courses),
+                ranking <span className="font-mono text-amber-400">{gapAnalysis.hustle.rank != null ? `#${gapAnalysis.hustle.rank}` : '—'}</span> combined among tracked providers.
+              </p>
 
               {/* Strong categories */}
               <div>

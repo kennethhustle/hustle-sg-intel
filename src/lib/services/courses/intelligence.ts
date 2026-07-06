@@ -11,6 +11,16 @@
  * getRecentCourseChanges) are the contract the UI is built against — field
  * names and shapes here are load-bearing, do not rename without updating
  * consumers.
+ *
+ * DUAL HUSTLE PROVIDERS (migration 012): Hustle Singapore has TWO
+ * MySkillsFuture provider entities — 'HUSTLE ACADEMY' and 'HUSTLE INSTITUTE
+ * PTE. LTD.' — stored as two competitor_data_sources aliases under the SAME
+ * competitor row ('Hustle SG', is_hustle=true). Every grouping in this file
+ * keys by PROVIDER ENTITY (sf_courses.provider_name), not by competitor_id,
+ * so the two Hustle entities are ranked/displayed as separate provider rows
+ * everywhere while still resolving to the same underlying competitor (color,
+ * is_hustle) via buildProviderDisplayMap(). Non-Hustle competitors have
+ * exactly one active alias each, so this is a no-op behavior change for them.
  */
 import { createServiceClient } from '@/lib/supabase/server'
 import { CATEGORY_CLUSTERS, normalizeCluster, type CategoryCluster } from '@/lib/services/courses/categories'
@@ -114,13 +124,84 @@ async function loadActiveCourses(supabase: SupabaseClient): Promise<SfCourseRow[
   return ((data ?? []) as unknown as SfCourseRow[])
 }
 
-/** Resolve a display key for grouping: competitor_id when present, else provider_name. */
-function groupKey(c: SfCourseRow): string {
-  return c.competitor_id ?? `provider:${c.provider_name ?? 'Unknown'}`
-}
-
 function clusterOf(c: { category_cluster: string | null }): CategoryCluster {
   return normalizeCluster(c.category_cluster)
+}
+
+// ─── Provider entity display resolution (migration 012) ────────────────────
+//
+// Grouping key everywhere in this file is PROVIDER_NAME (sf_courses raw
+// TP_ALIAS), not competitor_id — a competitor with two active MySkillsFuture
+// aliases (Hustle SG) therefore produces two separate provider rows. This
+// map resolves each provider_name to its display name + competitor metadata.
+
+export interface ProviderDisplay {
+  providerName: string
+  displayName: string
+  color: string | null
+  isHustle: boolean
+  competitorId: string | null
+}
+
+/** Title-case a raw provider_name and strip common company suffixes, for providers with no alias row. */
+function fallbackDisplayName(providerName: string): string {
+  const stripped = providerName
+    .replace(/\bPTE\.?\s*LTD\.?$/i, '')
+    .replace(/\bPRIVATE\s+LIMITED$/i, '')
+    .replace(/\bLTD\.?$/i, '')
+    .trim()
+  const base = stripped.length > 0 ? stripped : providerName
+  return base
+    .toLowerCase()
+    .split(/\s+/)
+    .map((w) => (w.length > 0 ? w[0].toUpperCase() + w.slice(1) : w))
+    .join(' ')
+}
+
+/**
+ * Build provider_name -> display metadata for every active MySkillsFuture
+ * alias, joined to its competitor. Providers appearing in sf_courses without
+ * a matching alias row (should not normally happen) fall back to a
+ * title-cased provider_name with no color/competitor and isHustle=false.
+ */
+async function buildProviderDisplayMap(
+  supabase: SupabaseClient,
+  competitors: CompetitorRow[]
+): Promise<Map<string, ProviderDisplay>> {
+  const competitorById = new Map(competitors.map((c) => [c.id, c]))
+
+  const { data: sourceRows } = await supabase
+    .from('competitor_data_sources')
+    .select('competitor_id, identifier, display_name')
+    .eq('source_type', 'myskillsfuture')
+    .eq('is_active', true)
+
+  const map = new Map<string, ProviderDisplay>()
+  for (const row of (sourceRows ?? []) as Array<{ competitor_id: string; identifier: string; display_name: string | null }>) {
+    const comp = competitorById.get(row.competitor_id) ?? null
+    map.set(row.identifier, {
+      providerName: row.identifier,
+      displayName: row.display_name ?? comp?.name ?? row.identifier,
+      color: comp?.color ?? null,
+      isHustle: comp?.is_hustle ?? false,
+      competitorId: row.competitor_id,
+    })
+  }
+  return map
+}
+
+/** Resolve a provider_name to its display metadata, with a safe fallback for unmapped providers. */
+function resolveProvider(providerName: string | null, providerMap: Map<string, ProviderDisplay>): ProviderDisplay {
+  const name = providerName ?? 'Unknown'
+  const found = providerMap.get(name)
+  if (found) return found
+  return {
+    providerName: name,
+    displayName: name === 'Unknown' ? 'Unknown' : fallbackDisplayName(name),
+    color: null,
+    isHustle: false,
+    competitorId: null,
+  }
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -497,13 +578,13 @@ interface TopCourseEntry {
 async function writeDailySnapshots(supabase: SupabaseClient): Promise<number> {
   const courses = await loadActiveCourses(supabase)
   const competitors = await loadActiveCompetitors(supabase)
-  const competitorById = new Map(competitors.map((c) => [c.id, c]))
+  const providerMap = await buildProviderDisplayMap(supabase, competitors)
 
   const byProvider = new Map<string, { competitorId: string | null; providerName: string; courses: SfCourseRow[] }>()
   for (const c of courses) {
-    const providerName = c.competitor_id ? (competitorById.get(c.competitor_id)?.name ?? c.provider_name ?? 'Unknown') : (c.provider_name ?? 'Unknown')
-    const key = providerName
-    const entry = byProvider.get(key) ?? { competitorId: c.competitor_id, providerName, courses: [] }
+    const provider = resolveProvider(c.provider_name, providerMap)
+    const key = provider.providerName
+    const entry = byProvider.get(key) ?? { competitorId: provider.competitorId ?? c.competitor_id, providerName: key, courses: [] }
     entry.courses.push(c)
     byProvider.set(key, entry)
   }
@@ -658,7 +739,7 @@ async function alreadyProviderChanged(supabase: SupabaseClient, changeType: stri
 async function computeProviderThreatScores(supabase: SupabaseClient): Promise<number> {
   const courses = await loadActiveCourses(supabase)
   const competitors = await loadActiveCompetitors(supabase)
-  const competitorById = new Map(competitors.map((c) => [c.id, c]))
+  const providerMap = await buildProviderDisplayMap(supabase, competitors)
 
   const { data: categoryRows } = await supabase.from('course_categories').select('name, priority')
   const priorityByCategory = new Map(
@@ -668,13 +749,14 @@ async function computeProviderThreatScores(supabase: SupabaseClient): Promise<nu
     Array.from(priorityByCategory.entries()).filter(([, p]) => p >= 75).map(([name]) => name)
   )
 
-  // Group by competitor_id (fallback provider_name)
+  // Group by provider entity (provider_name) — Hustle's two entities are
+  // kept separate here and BOTH excluded from threat scoring below (threat
+  // scores are only computed for non-Hustle providers).
   const byGroup = new Map<string, { competitorId: string | null; providerName: string; isHustle: boolean; courses: SfCourseRow[] }>()
   for (const c of courses) {
-    const comp = c.competitor_id ? competitorById.get(c.competitor_id) : null
-    const providerName = comp?.name ?? c.provider_name ?? 'Unknown'
-    const key = c.competitor_id ?? `provider:${providerName}`
-    const entry = byGroup.get(key) ?? { competitorId: c.competitor_id, providerName, isHustle: comp?.is_hustle ?? false, courses: [] }
+    const provider = resolveProvider(c.provider_name, providerMap)
+    const key = provider.providerName
+    const entry = byGroup.get(key) ?? { competitorId: provider.competitorId, providerName: key, isHustle: provider.isHustle, courses: [] }
     entry.courses.push(c)
     byGroup.set(key, entry)
   }
@@ -835,8 +917,12 @@ export interface CourseMarketSnapshot {
   removedCourses14d: number
   topGrowthProvider: { name: string; deltaRuns: number; deltaPct: number } | null
   topGrowthCategory: { name: string; deltaRuns: number } | null
+  /** @deprecated Use hustleRanks instead — this holds the BEST-ranked Hustle entity's rank by runs, kept for backwards compatibility. */
   hustleRankByRuns: number | null
+  /** @deprecated Use hustleRanks instead — this holds the BEST-ranked Hustle entity's rank by courses, kept for backwards compatibility. */
   hustleRankByCourses: number | null
+  /** One entry per Hustle provider entity that has any active courses (e.g. Hustle Academy, Hustle Institute). */
+  hustleRanks: Array<{ name: string; rankByRuns: number | null; rankByCourses: number | null }>
   lastRefreshed: string | null
 }
 
@@ -844,14 +930,13 @@ export async function getCourseMarketSnapshot(): Promise<CourseMarketSnapshot> {
   const supabase = await createServiceClient()
   const courses = await loadActiveCourses(supabase)
   const competitors = await loadActiveCompetitors(supabase)
-  const competitorById = new Map(competitors.map((c) => [c.id, c]))
+  const providerMap = await buildProviderDisplayMap(supabase, competitors)
 
   const byGroup = new Map<string, { name: string; isHustle: boolean; runs: number; courseCount: number }>()
   for (const c of courses) {
-    const comp = c.competitor_id ? competitorById.get(c.competitor_id) : null
-    const name = comp?.name ?? c.provider_name ?? 'Unknown'
-    const key = c.competitor_id ?? `provider:${name}`
-    const entry = byGroup.get(key) ?? { name, isHustle: comp?.is_hustle ?? false, runs: 0, courseCount: 0 }
+    const provider = resolveProvider(c.provider_name, providerMap)
+    const key = provider.providerName
+    const entry = byGroup.get(key) ?? { name: provider.displayName, isHustle: provider.isHustle, runs: 0, courseCount: 0 }
     entry.runs += c.upcoming_run_count ?? 0
     entry.courseCount += 1
     byGroup.set(key, entry)
@@ -922,8 +1007,27 @@ export async function getCourseMarketSnapshot(): Promise<CourseMarketSnapshot> {
 
   const sortedByRuns = Array.from(byGroup.values()).sort((a, b) => b.runs - a.runs)
   const sortedByCourses = Array.from(byGroup.values()).sort((a, b) => b.courseCount - a.courseCount)
-  const hustleRankByRuns = sortedByRuns.findIndex((g) => g.isHustle)
-  const hustleRankByCourses = sortedByCourses.findIndex((g) => g.isHustle)
+
+  const hustleEntities = Array.from(byGroup.values()).filter((g) => g.isHustle)
+  const hustleRanks = hustleEntities.map((g) => {
+    const rankByRunsIdx = sortedByRuns.findIndex((s) => s === g)
+    const rankByCoursesIdx = sortedByCourses.findIndex((s) => s === g)
+    return {
+      name: g.name,
+      rankByRuns: rankByRunsIdx >= 0 ? rankByRunsIdx + 1 : null,
+      rankByCourses: rankByCoursesIdx >= 0 ? rankByCoursesIdx + 1 : null,
+    }
+  })
+
+  // Deprecated fields: best (lowest numeric rank) among Hustle entities, for backwards safety.
+  const bestRankByRuns = hustleRanks.reduce<number | null>((best, r) => {
+    if (r.rankByRuns == null) return best
+    return best == null ? r.rankByRuns : Math.min(best, r.rankByRuns)
+  }, null)
+  const bestRankByCourses = hustleRanks.reduce<number | null>((best, r) => {
+    if (r.rankByCourses == null) return best
+    return best == null ? r.rankByCourses : Math.min(best, r.rankByCourses)
+  }, null)
 
   const { data: lastLog } = await supabase
     .from('data_refresh_logs')
@@ -943,8 +1047,9 @@ export async function getCourseMarketSnapshot(): Promise<CourseMarketSnapshot> {
     removedCourses14d: removedCount ?? 0,
     topGrowthProvider,
     topGrowthCategory,
-    hustleRankByRuns: hustleRankByRuns >= 0 ? hustleRankByRuns + 1 : null,
-    hustleRankByCourses: hustleRankByCourses >= 0 ? hustleRankByCourses + 1 : null,
+    hustleRankByRuns: bestRankByRuns,
+    hustleRankByCourses: bestRankByCourses,
+    hustleRanks,
     lastRefreshed: (lastLog as { started_at: string } | null)?.started_at ?? null,
   }
 }
@@ -982,17 +1087,21 @@ function demandLevelOf(score: number | null): CourseRowDto['demandLevel'] {
   return 'Low'
 }
 
-function toCourseRowDto(c: SfCourseRow, comp: CompetitorRow | null): CourseRowDto {
+function toCourseRowDto(c: SfCourseRow, provider: ProviderDisplay): CourseRowDto {
   const runDelta = c.prev_run_count !== null && c.prev_run_count !== undefined && c.upcoming_run_count !== null
     ? c.upcoming_run_count - c.prev_run_count
     : null
   return {
     sfRefNo: c.sf_ref_no,
     title: c.title,
-    provider: comp?.name ?? c.provider_name ?? 'Unknown',
-    competitorName: comp?.name ?? null,
-    color: comp?.color ?? null,
-    isHustle: comp?.is_hustle ?? false,
+    provider: provider.displayName,
+    // NOTE: field name kept as `competitorName` for contract stability, but it
+    // now carries the PROVIDER ENTITY display name (e.g. 'Hustle Academy' /
+    // 'Hustle Institute'), not the competitor row name — this is intentional
+    // so Hustle courses show which entity they belong to.
+    competitorName: provider.displayName,
+    color: provider.color,
+    isHustle: provider.isHustle,
     category: clusterOf(c),
     runs: c.upcoming_run_count ?? 0,
     fee: c.course_fee ?? null,
@@ -1012,10 +1121,10 @@ export async function getCourseLeaderboard(limit = 500): Promise<CourseRowDto[]>
   const supabase = await createServiceClient()
   const courses = await loadActiveCourses(supabase)
   const competitors = await loadActiveCompetitors(supabase)
-  const competitorById = new Map(competitors.map((c) => [c.id, c]))
+  const providerMap = await buildProviderDisplayMap(supabase, competitors)
 
   return courses
-    .map((c) => toCourseRowDto(c, c.competitor_id ? competitorById.get(c.competitor_id) ?? null : null))
+    .map((c) => toCourseRowDto(c, resolveProvider(c.provider_name, providerMap)))
     .sort((a, b) => b.runs - a.runs)
     .slice(0, limit)
 }
@@ -1046,14 +1155,13 @@ export async function getProviderCourseLeaderboard(): Promise<ProviderLeaderboar
   const supabase = await createServiceClient()
   const courses = await loadActiveCourses(supabase)
   const competitors = await loadActiveCompetitors(supabase)
-  const competitorById = new Map(competitors.map((c) => [c.id, c]))
+  const providerMap = await buildProviderDisplayMap(supabase, competitors)
 
-  const byGroup = new Map<string, { competitorId: string | null; comp: CompetitorRow | null; providerName: string; courses: SfCourseRow[] }>()
+  const byGroup = new Map<string, { provider: ProviderDisplay; courses: SfCourseRow[] }>()
   for (const c of courses) {
-    const comp = c.competitor_id ? competitorById.get(c.competitor_id) ?? null : null
-    const providerName = comp?.name ?? c.provider_name ?? 'Unknown'
-    const key = c.competitor_id ?? `provider:${providerName}`
-    const entry = byGroup.get(key) ?? { competitorId: c.competitor_id, comp, providerName, courses: [] }
+    const provider = resolveProvider(c.provider_name, providerMap)
+    const key = provider.providerName
+    const entry = byGroup.get(key) ?? { provider, courses: [] }
     entry.courses.push(c)
     byGroup.set(key, entry)
   }
@@ -1081,7 +1189,7 @@ export async function getProviderCourseLeaderboard(): Promise<ProviderLeaderboar
 
   const results: ProviderLeaderboardEntry[] = []
 
-  for (const { competitorId, comp, providerName, courses: providerCourses } of byGroup.values()) {
+  for (const { provider, courses: providerCourses } of byGroup.values()) {
     const totalRuns = providerCourses.reduce((s, c) => s + (c.upcoming_run_count ?? 0), 0)
     const categoryBreakdown: Record<string, { courses: number; runs: number }> = {}
     for (const c of providerCourses) {
@@ -1100,12 +1208,17 @@ export async function getProviderCourseLeaderboard(): Promise<ProviderLeaderboar
     const totalRespondents = providerCourses.reduce((s, c) => s + (c.respondent_count ?? 0), 0)
     const newCourses7d = providerCourses.filter((c) => c.first_seen_at && c.first_seen_at >= daysAgoIso(7)).length
 
-    const growth = growthByProvider.get(providerName)
+    // Threat scores and provider_growth changes are keyed by the raw
+    // provider_name identifier (see computeProviderThreatScores /
+    // detectProviderGrowthChanges), not the display name.
+    const growth = growthByProvider.get(provider.providerName)
     const runGrowth = growth && growth.change_amount !== null && growth.change_percentage !== null
       ? { abs: growth.change_amount, pct: growth.change_percentage }
       : null
 
-    const threat = threatByProvider.get(providerName)
+    // Threat scores are only computed for non-Hustle providers — both Hustle
+    // entities intentionally get threat: null here (see computeProviderThreatScores).
+    const threat = threatByProvider.get(provider.providerName)
     const threatDto = threat ? { score: threat.total_score, label: threat.threat_label, breakdown: threat.breakdown, evidence: threat.evidence } : null
 
     const withFees = providerCourses.filter((c) => c.course_fee !== null && c.course_fee !== undefined)
@@ -1113,10 +1226,10 @@ export async function getProviderCourseLeaderboard(): Promise<ProviderLeaderboar
     const cheapestC = withFees.length > 0 ? [...withFees].sort((a, b) => (a.course_fee ?? 0) - (b.course_fee ?? 0))[0] : null
 
     results.push({
-      competitorId,
-      name: providerName,
-      color: comp?.color ?? null,
-      isHustle: comp?.is_hustle ?? false,
+      competitorId: provider.competitorId,
+      name: provider.displayName,
+      color: provider.color,
+      isHustle: provider.isHustle,
       totalRuns,
       activeCourses: providerCourses.length,
       categoriesServed: Object.keys(categoryBreakdown).length,
@@ -1131,7 +1244,7 @@ export async function getProviderCourseLeaderboard(): Promise<ProviderLeaderboar
       priciest: priciestC ? { title: priciestC.title, fee: priciestC.course_fee as number } : null,
       cheapest: cheapestC ? { title: cheapestC.title, fee: cheapestC.course_fee as number } : null,
       categoryBreakdown,
-      courses: providerCourses.map((c) => toCourseRowDto(c, comp)).sort((a, b) => b.runs - a.runs),
+      courses: providerCourses.map((c) => toCourseRowDto(c, provider)).sort((a, b) => b.runs - a.runs),
     })
   }
 
@@ -1155,7 +1268,8 @@ export interface CategoryIntelligenceEntry {
   avgRating: number | null
   respondents: number
   growth: { abs: number; pct: number } | null
-  hustle: { courses: number; runs: number; sharePct: number }
+  /** Combined Hustle presence (both provider entities) plus a per-entity breakdown. */
+  hustle: { courses: number; runs: number; sharePct: number; byEntity: Array<{ name: string; courses: number; runs: number }> }
   opportunity: { score: number; label: string; breakdown: unknown; evidence: unknown } | null
   competitionLevel: 'low' | 'medium' | 'high'
   demandLevel: 'low' | 'medium' | 'high'
@@ -1165,8 +1279,7 @@ export async function getCategoryIntelligence(): Promise<CategoryIntelligenceEnt
   const supabase = await createServiceClient()
   const courses = await loadActiveCourses(supabase)
   const competitors = await loadActiveCompetitors(supabase)
-  const competitorById = new Map(competitors.map((c) => [c.id, c]))
-  const hustleComp = competitors.find((c) => c.is_hustle) ?? null
+  const providerMap = await buildProviderDisplayMap(supabase, competitors)
 
   const { data: categoryRows } = await supabase.from('course_categories').select('name, priority')
   const priorityByCategory = new Map(((categoryRows ?? []) as Array<{ name: string; priority: number }>).map((r) => [r.name, r.priority]))
@@ -1233,8 +1346,8 @@ export async function getCategoryIntelligence(): Promise<CategoryIntelligenceEnt
 
     const providerRuns = new Map<string, number>()
     for (const c of list) {
-      const comp = c.competitor_id ? competitorById.get(c.competitor_id) : null
-      const name = comp?.name ?? c.provider_name ?? 'Unknown'
+      const provider = resolveProvider(c.provider_name, providerMap)
+      const name = provider.displayName
       providerRuns.set(name, (providerRuns.get(name) ?? 0) + (c.upcoming_run_count ?? 0))
     }
 
@@ -1247,8 +1360,8 @@ export async function getCategoryIntelligence(): Promise<CategoryIntelligenceEnt
       .sort((a, b) => (b.upcoming_run_count ?? 0) - (a.upcoming_run_count ?? 0))
       .slice(0, 3)
       .map((c) => {
-        const comp = c.competitor_id ? competitorById.get(c.competitor_id) : null
-        return { title: c.title, provider: comp?.name ?? c.provider_name ?? 'Unknown', runs: c.upcoming_run_count ?? 0 }
+        const provider = resolveProvider(c.provider_name, providerMap)
+        return { title: c.title, provider: provider.displayName, runs: c.upcoming_run_count ?? 0 }
       })
 
     const fees = list.map((c) => c.course_fee).filter((f): f is number => f !== null && f !== undefined)
@@ -1261,8 +1374,23 @@ export async function getCategoryIntelligence(): Promise<CategoryIntelligenceEnt
       ? { abs: totalRuns - priorRuns, pct: priorRuns > 0 ? round1(((totalRuns - priorRuns) / priorRuns) * 100) : (totalRuns > 0 ? 100 : 0) }
       : null
 
-    const hustleCourses = hustleComp ? list.filter((c) => c.competitor_id === hustleComp.id) : []
+    // Combined Hustle presence across BOTH provider entities, plus a
+    // per-entity breakdown (byEntity) for entities that have courses here.
+    const hustleCoursesByEntity = new Map<string, SfCourseRow[]>()
+    for (const c of list) {
+      const provider = resolveProvider(c.provider_name, providerMap)
+      if (!provider.isHustle) continue
+      const arr = hustleCoursesByEntity.get(provider.displayName) ?? []
+      arr.push(c)
+      hustleCoursesByEntity.set(provider.displayName, arr)
+    }
+    const hustleCourses = Array.from(hustleCoursesByEntity.values()).flat()
     const hustleRuns = hustleCourses.reduce((s, c) => s + (c.upcoming_run_count ?? 0), 0)
+    const hustleByEntity = Array.from(hustleCoursesByEntity.entries()).map(([name, entityCourses]) => ({
+      name,
+      courses: entityCourses.length,
+      runs: entityCourses.reduce((s, c) => s + (c.upcoming_run_count ?? 0), 0),
+    }))
 
     const opp = opportunityByCategory.get(cluster)
 
@@ -1283,6 +1411,7 @@ export async function getCategoryIntelligence(): Promise<CategoryIntelligenceEnt
         courses: hustleCourses.length,
         runs: hustleRuns,
         sharePct: totalRuns > 0 ? round1((hustleRuns / totalRuns) * 100) : 0,
+        byEntity: hustleByEntity,
       },
       opportunity: opp ? { score: opp.total_score, label: opportunityLabel(opp.total_score), breakdown: opp.breakdown, evidence: opp.evidence } : null,
       competitionLevel: providerRuns.size >= 4 ? 'high' : providerRuns.size >= 2 ? 'medium' : 'low',
@@ -1298,14 +1427,25 @@ export async function getCategoryIntelligence(): Promise<CategoryIntelligenceEnt
 // ══════════════════════════════════════════════════════════════════════════
 
 export interface HustleGapAnalysis {
+  /** Combined Hustle presence across BOTH provider entities (Hustle Academy + Hustle Institute). */
   hustle: {
     totalRuns: number
     activeCourses: number
     marketSharePct: number
+    /** Rank the COMBINED Hustle runs would hold among providers (i.e. among the OTHER providers plus one synthetic combined-Hustle entry). Noted as combined, not either entity's individual rank. */
     rank: number | null
     topCategories: Array<{ category: string; runs: number }>
     topCourse: { title: string; runs: number } | null
   }
+  /** Per-entity breakdown — one entry per Hustle provider entity that has any active courses. */
+  entities: Array<{
+    name: string
+    totalRuns: number
+    activeCourses: number
+    topCategories: Array<{ category: string; runs: number }>
+    topCourse: { title: string; runs: number } | null
+    rankByRuns: number | null
+  }>
   strongCategories: string[]
   weakCategories: Array<{ category: string; hustleRuns: number; leaderName: string; leaderRuns: number }>
   absentCategories: Array<{ category: string; marketRuns: number; topCompetitor: string | null }>
@@ -1324,25 +1464,32 @@ export async function getHustleGapAnalysis(): Promise<HustleGapAnalysis> {
   const supabase = await createServiceClient()
   const courses = await loadActiveCourses(supabase)
   const competitors = await loadActiveCompetitors(supabase)
-  const competitorById = new Map(competitors.map((c) => [c.id, c]))
-  const hustleComp = competitors.find((c) => c.is_hustle) ?? null
+  const providerMap = await buildProviderDisplayMap(supabase, competitors)
 
   const categoryIntel = await getCategoryIntelligence()
 
+  // Group by provider entity (both Hustle entities kept separate here), then
+  // build a COMBINED "Hustle SG (combined)" synthetic entry for ranking
+  // purposes so competitorsAhead / rank reflect Hustle's combined presence.
   const byGroupRuns = new Map<string, number>()
   for (const c of courses) {
-    const comp = c.competitor_id ? competitorById.get(c.competitor_id) : null
-    const name = comp?.name ?? c.provider_name ?? 'Unknown'
+    const provider = resolveProvider(c.provider_name, providerMap)
+    if (provider.isHustle) continue // combined below
+    const name = provider.displayName
     byGroupRuns.set(name, (byGroupRuns.get(name) ?? 0) + (c.upcoming_run_count ?? 0))
   }
-  const totalMarketRuns = Array.from(byGroupRuns.values()).reduce((s, v) => s + v, 0)
 
-  const hustleCourses = hustleComp ? courses.filter((c) => c.competitor_id === hustleComp.id) : []
+  const hustleCourses = courses.filter((c) => resolveProvider(c.provider_name, providerMap).isHustle)
   const hustleTotalRuns = hustleCourses.reduce((s, c) => s + (c.upcoming_run_count ?? 0), 0)
-  const hustleName = hustleComp?.name ?? 'Hustle SG'
+  const HUSTLE_COMBINED_KEY = 'Hustle SG (combined)'
 
-  const sortedGroups = Array.from(byGroupRuns.entries()).sort((a, b) => b[1] - a[1])
-  const hustleRankIdx = sortedGroups.findIndex(([name]) => name === hustleName)
+  const totalMarketRuns = Array.from(byGroupRuns.values()).reduce((s, v) => s + v, 0) + hustleTotalRuns
+
+  // Combined ranking: Hustle's combined runs vs every OTHER provider's runs.
+  const combinedGroups = new Map(byGroupRuns)
+  combinedGroups.set(HUSTLE_COMBINED_KEY, hustleTotalRuns)
+  const sortedCombinedGroups = Array.from(combinedGroups.entries()).sort((a, b) => b[1] - a[1])
+  const hustleRankIdx = sortedCombinedGroups.findIndex(([name]) => name === HUSTLE_COMBINED_KEY)
 
   const hustleCategoryRuns = new Map<string, number>()
   for (const c of hustleCourses) {
@@ -1356,27 +1503,67 @@ export async function getHustleGapAnalysis(): Promise<HustleGapAnalysis> {
 
   const topHustleCourse = [...hustleCourses].sort((a, b) => (b.upcoming_run_count ?? 0) - (a.upcoming_run_count ?? 0))[0]
 
+  // Per-entity breakdown (one entry per Hustle provider entity with >=1 course).
+  const hustleCoursesByEntity = new Map<string, SfCourseRow[]>()
+  for (const c of hustleCourses) {
+    const provider = resolveProvider(c.provider_name, providerMap)
+    const arr = hustleCoursesByEntity.get(provider.displayName) ?? []
+    arr.push(c)
+    hustleCoursesByEntity.set(provider.displayName, arr)
+  }
+  // Rank each entity individually among ALL providers (other providers + this one entity, i.e. excluding the other Hustle entity).
+  const entities: HustleGapAnalysis['entities'] = Array.from(hustleCoursesByEntity.entries()).map(([name, entityCourses]) => {
+    const entityRuns = entityCourses.reduce((s, c) => s + (c.upcoming_run_count ?? 0), 0)
+    const entityGroups = new Map(byGroupRuns)
+    entityGroups.set(name, entityRuns)
+    const sortedEntityGroups = Array.from(entityGroups.entries()).sort((a, b) => b[1] - a[1])
+    const rankIdx = sortedEntityGroups.findIndex(([n]) => n === name)
+
+    const entityCategoryRuns = new Map<string, number>()
+    for (const c of entityCourses) {
+      const cluster = clusterOf(c)
+      entityCategoryRuns.set(cluster, (entityCategoryRuns.get(cluster) ?? 0) + (c.upcoming_run_count ?? 0))
+    }
+    const entityTopCategories = Array.from(entityCategoryRuns.entries())
+      .map(([category, runs]) => ({ category, runs }))
+      .sort((a, b) => b.runs - a.runs)
+      .slice(0, 5)
+    const entityTopCourse = [...entityCourses].sort((a, b) => (b.upcoming_run_count ?? 0) - (a.upcoming_run_count ?? 0))[0]
+
+    return {
+      name,
+      totalRuns: entityRuns,
+      activeCourses: entityCourses.length,
+      topCategories: entityTopCategories,
+      topCourse: entityTopCourse ? { title: entityTopCourse.title, runs: entityTopCourse.upcoming_run_count ?? 0 } : null,
+      rankByRuns: rankIdx >= 0 ? rankIdx + 1 : null,
+    }
+  })
+
+  const hustleEntityNames = new Set(entities.map((e) => e.name))
+
   const strongCategories: string[] = []
   const weakCategories: HustleGapAnalysis['weakCategories'] = []
   const absentCategories: HustleGapAnalysis['absentCategories'] = []
 
   for (const cat of categoryIntel) {
     if (cat.category === 'Other') continue
+    // weakCategories/absentCategories compare against COMBINED Hustle runs (cat.hustle.*).
     const hustleShare = cat.hustle.sharePct
-    const leader = cat.topProviders.find((p) => p.name !== hustleName) ?? cat.topProviders[0] ?? null
+    const leader = cat.topProviders.find((p) => !hustleEntityNames.has(p.name)) ?? cat.topProviders[0] ?? null
 
     if (cat.hustle.courses === 0 && cat.runs > 0) {
       absentCategories.push({ category: cat.category, marketRuns: cat.runs, topCompetitor: leader?.name ?? null })
     } else if (hustleShare >= 40) {
       strongCategories.push(cat.category)
-    } else if (leader && leader.name !== hustleName && leader.runs > cat.hustle.runs) {
+    } else if (leader && !hustleEntityNames.has(leader.name) && leader.runs > cat.hustle.runs) {
       weakCategories.push({ category: cat.category, hustleRuns: cat.hustle.runs, leaderName: leader.name, leaderRuns: leader.runs })
     }
   }
 
-  const competitorsAhead = sortedGroups
-    .filter(([name]) => name !== hustleName)
-    .slice(0, hustleRankIdx >= 0 ? hustleRankIdx : sortedGroups.length)
+  const competitorsAhead = sortedCombinedGroups
+    .filter(([name]) => name !== HUSTLE_COMBINED_KEY)
+    .slice(0, hustleRankIdx >= 0 ? hustleRankIdx : sortedCombinedGroups.length)
     .map(([name, runs]) => ({ name, runs }))
 
   // ---------- whatThisMeans (rule-generated, cites real numbers) ----------
@@ -1393,29 +1580,41 @@ export async function getHustleGapAnalysis(): Promise<HustleGapAnalysis> {
   for (const cat of categoryIntel) {
     if (cat.category === 'Other') continue
 
-    // attack: high-opportunity-score categories where Hustle share <10%
+    // Entity split text, when useful (e.g. "Hustle Academy has no AI courses
+    // while Hustle Institute runs 8") — only meaningful when Hustle has >1
+    // entity active in this category or one entity is present and one absent.
+    const entitySplitText = (() => {
+      if (entities.length < 2) return ''
+      const parts = entities.map((e) => {
+        const entityRuns = cat.hustle.byEntity.find((b) => b.name === e.name)?.runs ?? 0
+        return `${e.name} ${entityRuns === 0 ? 'has none' : `runs ${entityRuns}`}`
+      })
+      return ` (${parts.join(', ')})`
+    })()
+
+    // attack: high-opportunity-score categories where COMBINED Hustle share <10%
     if (cat.opportunity && cat.opportunity.score >= 60 && cat.hustle.sharePct < 10) {
       const leader = cat.topProviders[0]
-      const leaderText = leader ? ` ${leader.name} runs ${leader.runs} upcoming ${cat.category} sessions while Hustle has ${cat.hustle.runs === 0 ? 'none' : `only ${cat.hustle.runs}`}.` : ''
+      const leaderText = leader ? ` ${leader.name} runs ${leader.runs} upcoming ${cat.category} sessions while Hustle has ${cat.hustle.runs === 0 ? 'none' : `only ${cat.hustle.runs}`}${entitySplitText}.` : ''
       attackOpportunities.push(
-        `${cat.category} has an opportunity score of ${cat.opportunity.score} with Hustle holding only ${cat.hustle.sharePct}% share.${leaderText}${leader && leader.runs > 0 && cat.hustle.runs === 0 ? ' — high demand category where Hustle is absent.' : ''}`
+        `${cat.category} has an opportunity score of ${cat.opportunity.score} with Hustle holding only ${cat.hustle.sharePct}% combined share.${leaderText}${leader && leader.runs > 0 && cat.hustle.runs === 0 ? ' — high demand category where Hustle is absent.' : ''}`
       )
       attackCategorySet.add(cat.category)
     }
 
-    // defensive: priority>=75 categories where a competitor's runs > 1.5x Hustle's
+    // defensive: priority>=75 categories where a competitor's runs > 1.5x COMBINED Hustle's
     if (cat.priority >= 75) {
-      const leader = cat.topProviders.find((p) => p.name !== hustleName)
+      const leader = cat.topProviders.find((p) => !hustleEntityNames.has(p.name))
       if (leader && (cat.hustle.runs === 0 ? leader.runs > 0 : leader.runs > cat.hustle.runs * 1.5)) {
         defensivePriorities.push(
-          `${leader.name} runs ${leader.runs} upcoming ${cat.category} sessions vs Hustle's ${cat.hustle.runs} — a strategic category (priority ${cat.priority}) where Hustle is losing ground.`
+          `${leader.name} runs ${leader.runs} upcoming ${cat.category} sessions vs Hustle's combined ${cat.hustle.runs}${entitySplitText} — a strategic category (priority ${cat.priority}) where Hustle is losing ground.`
         )
         defensiveCategorySet.add(cat.category)
       }
     }
 
-    // pricing: Hustle median fee deviates >20% from market median
-    if (hustleComp && cat.hustle.courses > 0 && cat.medianFee !== null && cat.medianFee > 0) {
+    // pricing: combined Hustle median fee deviates >20% from market median
+    if (hustleCourses.length > 0 && cat.hustle.courses > 0 && cat.medianFee !== null && cat.medianFee > 0) {
       const hustleCatCourses = hustleCourses.filter((c) => clusterOf(c) === cat.category)
       const hustleFees = hustleCatCourses.map((c) => c.course_fee).filter((f): f is number => f !== null && f !== undefined)
       const hustleMedianFee = median(hustleFees)
@@ -1423,19 +1622,20 @@ export async function getHustleGapAnalysis(): Promise<HustleGapAnalysis> {
         const pctDev = ((hustleMedianFee - cat.medianFee) / cat.medianFee) * 100
         if (Math.abs(pctDev) > 20) {
           pricingInsights.push(
-            `Hustle's median ${cat.category} fee ($${hustleMedianFee}) is ${pctDev > 0 ? 'above' : 'below'} the market median ($${cat.medianFee}) by ${round1(Math.abs(pctDev))}%.`
+            `Hustle's combined median ${cat.category} fee ($${hustleMedianFee}) is ${pctDev > 0 ? 'above' : 'below'} the market median ($${cat.medianFee}) by ${round1(Math.abs(pctDev))}%.`
           )
         }
       }
     }
 
-    // scheduling: Hustle courses with demand_score>=50 but runs < category leader's top course
+    // scheduling: Hustle courses (either entity) with demand_score>=50 but runs < category leader's top course
     const leaderTopCourse = cat.topCourses[0] ?? null
     if (leaderTopCourse) {
       for (const c of hustleCourses.filter((c) => clusterOf(c) === cat.category)) {
-        if ((c.demand_score ?? 0) >= 50 && (c.upcoming_run_count ?? 0) < leaderTopCourse.runs && leaderTopCourse.provider !== hustleName) {
+        if ((c.demand_score ?? 0) >= 50 && (c.upcoming_run_count ?? 0) < leaderTopCourse.runs && !hustleEntityNames.has(leaderTopCourse.provider)) {
+          const entityName = resolveProvider(c.provider_name, providerMap).displayName
           schedulingInsights.push(
-            `"${c.title}" has a demand score of ${c.demand_score} but only ${c.upcoming_run_count ?? 0} runs, while ${leaderTopCourse.provider}'s "${leaderTopCourse.title}" runs ${leaderTopCourse.runs} sessions — consider adding more cohorts.`
+            `${entityName}'s "${c.title}" has a demand score of ${c.demand_score} but only ${c.upcoming_run_count ?? 0} runs, while ${leaderTopCourse.provider}'s "${leaderTopCourse.title}" runs ${leaderTopCourse.runs} sessions — consider adding more cohorts.`
           )
         }
       }
@@ -1475,6 +1675,7 @@ export async function getHustleGapAnalysis(): Promise<HustleGapAnalysis> {
       topCategories,
       topCourse: topHustleCourse ? { title: topHustleCourse.title, runs: topHustleCourse.upcoming_run_count ?? 0 } : null,
     },
+    entities,
     strongCategories,
     weakCategories,
     absentCategories,

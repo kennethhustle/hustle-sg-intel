@@ -136,6 +136,9 @@ ${JSON.stringify(payload.socialIntel.competitors, null, 2)}
 RECENT ALERTS AND DATA REFRESH ISSUES:
 ${JSON.stringify(payload.alertsAndChanges, null, 2)}
 
+HUSTLE PROVIDER ENTITIES (Hustle operates multiple MySkillsFuture training-provider entities — per-entity course stats):
+${JSON.stringify(payload.hustleProviderEntities, null, 2)}
+
 DATA FRESHNESS BY MODULE:
 ${JSON.stringify(payload.dataFreshness, null, 2)}
 
@@ -173,6 +176,7 @@ Strict rules:
 - Do NOT repeat any title (or a close rephrasing of one) from the TITLES ALREADY USED list above.
 - Only reference competitors, numbers, and categories that actually appear in the data provided.
 - Focus on actionable, specific intelligence — not generic advice.
+- Hustle operates TWO MySkillsFuture provider entities: Hustle Academy and Hustle Institute (see HUSTLE PROVIDER ENTITIES above). Treat them as separate providers when comparing course runs against competitors — a competitor may have more runs than either entity individually. You may also reference their combined presence when strategically useful (e.g. "Across both Hustle entities, Hustle has X total runs"). Never assume Hustle is only Hustle Institute.
 
 You are given the operational status of every data source (see DATA SOURCE OPERATIONAL STATUS above). Rules for using it:
 - Never make claims based on sources marked unavailable, failed, or not_configured.

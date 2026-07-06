@@ -177,6 +177,18 @@ export interface IntelligencePayload {
   topCourseChanges: CourseChangeSummaryEntry[]
   providerThreatScores: ProviderThreatSummaryEntry[]
   categoryIntelSummary: CategoryIntelSummaryEntry[]
+  /** Hustle operates multiple MySkillsFuture provider entities (Hustle Academy +
+   *  Hustle Institute) — per-entity course stats so the AI never assumes Hustle
+   *  is a single provider. */
+  hustleProviderEntities: HustleProviderEntity[]
+}
+
+export interface HustleProviderEntity {
+  name: string
+  active_course_count: number
+  total_upcoming_runs: number
+  top_categories: string[]
+  top_course: { title: string; runs: number } | null
 }
 
 const TOP_N_COURSES = 5
@@ -301,17 +313,19 @@ export async function buildIntelligencePayload(supabase: SupabaseClient): Promis
       topCourseChanges: [],
       providerThreatScores: [],
       categoryIntelSummary: [],
+      hustleProviderEntities: [],
     }
   }
 
   // ---------- Course intel ----------
   const { data: coursesRaw } = await supabase
     .from('sf_courses')
-    .select('competitor_id, title, category_text, category_cluster, course_fee, popularity_score, respondent_count, quality_rating, upcoming_run_count, is_active, first_seen_at, last_seen_at')
+    .select('competitor_id, provider_name, title, category_text, category_cluster, course_fee, popularity_score, respondent_count, quality_rating, upcoming_run_count, is_active, first_seen_at, last_seen_at')
     .in('competitor_id', competitorIds)
 
   type CourseRow = {
     competitor_id: string
+    provider_name: string | null
     title: string
     category_text: string | null
     category_cluster: string | null
@@ -372,6 +386,61 @@ export async function buildIntelligencePayload(supabase: SupabaseClient): Promis
       median_course_fee: median(fees),
     }
   })
+
+  // ---------- Hustle provider entities (Hustle Academy + Hustle Institute) ----------
+  // Hustle has multiple MySkillsFuture provider entities under one competitor row.
+  // Group its courses by provider_name so the AI can compare entities separately.
+  const hustleProviderEntities: HustleProviderEntity[] = []
+  try {
+    const hustleIds = competitors.filter((c) => c.is_hustle).map((c) => c.id)
+    if (hustleIds.length > 0) {
+      const { data: aliasRows } = await supabase
+        .from('competitor_data_sources')
+        .select('identifier, display_name')
+        .eq('source_type', 'myskillsfuture')
+        .eq('is_active', true)
+        .in('competitor_id', hustleIds)
+      const displayMap = new Map<string, string>(
+        ((aliasRows ?? []) as Array<{ identifier: string; display_name: string | null }>).map((r) => [
+          r.identifier,
+          r.display_name ?? r.identifier,
+        ])
+      )
+
+      const byEntity = new Map<string, CourseRow[]>()
+      for (const c of courses) {
+        if (!hustleIds.includes(c.competitor_id) || !c.is_active || !c.provider_name) continue
+        const list = byEntity.get(c.provider_name) ?? []
+        list.push(c)
+        byEntity.set(c.provider_name, list)
+      }
+
+      for (const [providerName, entityCourses] of byEntity.entries()) {
+        const runs = entityCourses.reduce((sum, c) => sum + (c.upcoming_run_count ?? 0), 0)
+        const clusterRuns = new Map<string, number>()
+        for (const c of entityCourses) {
+          const cluster = (c.category_cluster as CategoryCluster) || classifyCourse(c.title, c.category_text)
+          clusterRuns.set(cluster, (clusterRuns.get(cluster) ?? 0) + (c.upcoming_run_count ?? 0))
+        }
+        const top = [...entityCourses].sort(
+          (a, b) => (b.upcoming_run_count ?? 0) - (a.upcoming_run_count ?? 0)
+        )[0]
+        hustleProviderEntities.push({
+          name: displayMap.get(providerName) ?? providerName,
+          active_course_count: entityCourses.length,
+          total_upcoming_runs: runs,
+          top_categories: [...clusterRuns.entries()]
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 3)
+            .map(([cluster]) => cluster),
+          top_course: top ? { title: top.title, runs: top.upcoming_run_count ?? 0 } : null,
+        })
+      }
+      hustleProviderEntities.sort((a, b) => b.total_upcoming_runs - a.total_upcoming_runs)
+    }
+  } catch (err) {
+    console.error('Failed to build hustleProviderEntities for AI payload:', err)
+  }
 
   // Competitor overview — top clusters by course count/runs
   const competitorOverview: CompetitorOverview[] = competitors.map((comp) => {
@@ -734,6 +803,7 @@ export async function buildIntelligencePayload(supabase: SupabaseClient): Promis
     topCourseChanges,
     providerThreatScores,
     categoryIntelSummary,
+    hustleProviderEntities,
   }
 }
 
